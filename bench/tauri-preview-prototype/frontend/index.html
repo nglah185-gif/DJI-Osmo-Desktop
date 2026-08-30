@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DJI Preview Bench</title>
+  <style>
+    html, body { margin: 0; height: 100%; background: #101214; color: #f5f7f8; font: 14px system-ui; }
+    main { height: 100%; display: grid; place-items: center; }
+    section { width: min(720px, 88vw); }
+    canvas { width: 100%; aspect-ratio: 16 / 9; display: block; background: #050607; }
+    p { color: #aeb6bd; }
+  </style>
+</head>
+<body>
+  <main><section><canvas id="preview" width="640" height="360"></canvas><h1>Rust + Tauri WebView2 preview prototype</h1><p id="status">WebView2 display surface active</p></section></main>
+  <script>
+    const canvas = document.querySelector('#preview');
+    const context = canvas.getContext('2d');
+    let frame = 0;
+    function paint() {
+      context.fillStyle = `rgb(${32 + frame % 96}, 52, 64)`;
+      context.fillRect(0, 0, canvas.width, canvas.height);
+      context.fillStyle = '#fff';
+      context.font = '22px system-ui';
+      context.fillText(`WebView2 frame ${frame++}`, 24, 44);
+      requestAnimationFrame(paint);
+    }
+    paint();
+  </script>
+</body>
+</html>

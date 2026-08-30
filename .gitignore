@@ -1,0 +1,41 @@
+# Dependencies
+node_modules/
+
+# Build and package output
+release/
+dist/
+out/
+build/
+*.zip
+*.7z
+
+# Generated validation and benchmark artifacts
+artifacts/
+**/target/
+
+# Runtime and test logs
+*.log
+*.err
+*.tmp
+*.temp
+
+# Local environment and credentials
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Editor and OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Local caches and databases
+cache/
+*.sqlite
+*.sqlite3
+*.db
+

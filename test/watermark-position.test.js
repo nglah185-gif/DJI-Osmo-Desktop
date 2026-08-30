@@ -1,0 +1,6 @@
+const test = require("node:test");
+const assert = require("node:assert/strict");
+const { POSITIONS, positionFrom, pixelPosition, overlayExpressions } = require("../src/watermark/watermark-position");
+test("presets map to normalized coordinates", () => { assert.deepEqual(positionFrom("topLeft"), { x: 0, y: 0 }); assert.deepEqual(positionFrom("topRight"), { x: 1, y: 0 }); assert.deepEqual(positionFrom("center"), { x: 0.5, y: 0.5 }); assert.deepEqual(positionFrom("bottomLeft"), { x: 0, y: 1 }); assert.deepEqual(positionFrom("bottomCenter"), { x: 0.5, y: 1 }); assert.deepEqual(positionFrom("bottomRight"), { x: 1, y: 1 }); });
+test("pixel position respects margin and clamps to canvas", () => { const tl = pixelPosition("topLeft", 1920, 1080, 200, 60, 0.04); assert.equal(tl.x, 77); assert.equal(tl.y, 43); const br = pixelPosition("bottomRight", 1920, 1080, 200, 60, 0.04); assert.equal(br.x, 1920 - 200 - 77); assert.equal(br.y, 1080 - 60 - 43); const c = pixelPosition("center", 1920, 1080, 200, 60, 0.04); assert.ok(Math.abs(c.x - 960 + 100) < 200); });
+test("ffmpeg overlay expressions embed margins and edges", () => { const tl = overlayExpressions("topLeft"); assert.match(tl.x, /main_w/); assert.match(tl.y, /main_h/); const c = overlayExpressions("center"); assert.match(c.x, /\/2\)/); assert.match(c.y, /\/2\)/); });

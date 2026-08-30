@@ -1,0 +1,12 @@
+const test = require("node:test");
+const assert = require("node:assert/strict");
+const { sortAssets, compareAsset } = require("../src/renderer/sort");
+function asset(name, overrides) { return { original: { name, size: Number(overrides.size || 0), lastWriteTime: overrides.mtime || "", probe: { duration: overrides.duration, width: overrides.width, height: overrides.height, fps: overrides.fps ? { value: overrides.fps } : "UNKNOWN", creationTime: overrides.creationTime || "UNKNOWN" } } }; }
+const set = [asset("DJI_20260801145307_0010_D.MP4", { duration: 10, width: 3840, height: 2160, fps: 30, size: 500, creationTime: "2026-08-01T14:53:07Z" }), asset("DJI_20260712172028_0001_D.MP4", { duration: 13.888, width: 1920, height: 1080, fps: 29.97, size: 900, creationTime: "2026-07-12T17:20:28Z" }), asset("DJI_20260820111029_0123_D.MP4", { duration: 2, width: 1280, height: 720, fps: 120, size: 100, creationTime: "2026-08-20T11:10:29Z" })];
+test("latest first by creation time", () => { const out = sortAssets(set, "latest"); assert.equal(out[0].original.name, "DJI_20260820111029_0123_D.MP4"); assert.equal(out[2].original.name, "DJI_20260712172028_0001_D.MP4"); });
+test("duration descending", () => { const out = sortAssets(set, "duration-desc"); assert.equal(out[0].original.name, "DJI_20260712172028_0001_D.MP4"); });
+test("resolution ascending", () => { const out = sortAssets(set, "resolution-asc"); assert.equal(out[0].original.name, "DJI_20260820111029_0123_D.MP4"); });
+test("fps descending uses probe fps value", () => { const out = sortAssets(set, "fps-desc"); assert.equal(out[0].original.name, "DJI_20260820111029_0123_D.MP4"); });
+test("size descending", () => { const out = sortAssets(set, "size-desc"); assert.equal(out[0].original.name, "DJI_20260712172028_0001_D.MP4"); });
+test("name A-Z is stable and numeric-aware", () => { const out = sortAssets(set, "name-asc"); assert.equal(out[0].original.name, "DJI_20260712172028_0001_D.MP4"); assert.equal(out[2].original.name, "DJI_20260820111029_0123_D.MP4"); });
+test("UNKNOWN fields fall back to filename timestamps and never randomize", () => { const a = asset("DJI_20260712172028_0001_D.MP4", { duration: "UNKNOWN", width: "UNKNOWN", height: "UNKNOWN" }); const b = asset("DJI_20260801145307_0010_D.MP4", { duration: "UNKNOWN", width: "UNKNOWN", height: "UNKNOWN" }); assert.equal(compareAsset(a, b, "latest"), 1); assert.equal(compareAsset(b, a, "latest"), -1); });
