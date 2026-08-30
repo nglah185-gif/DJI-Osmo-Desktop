@@ -1,6 +1,6 @@
 # DJI Osmo Desktop V2
 
-`v2.0_beta` preview source release.
+`v3.0_beta` preview source release.
 
 DJI Osmo Desktop V2 is a Windows Electron application for browsing DJI camera
 media, identifying supported camera models, previewing D-Log/D-Log M color
@@ -54,4 +54,3 @@ The preview focuses on a single video track, non-destructive trimming and
 cutting, timeline interaction, color restoration, geometric transforms,
 watermarks, device detection, and export. It does not provide multi-track
 editing, a separate audio track, advanced transitions, keyframes, or AI tools.
-
