@@ -91,16 +91,35 @@ function emptyProbe() {
   return { videoCodec: null, audioCodec: null, hasAudio: false, width: null, height: null, frameRate: null, durationSeconds: null, bitRate: null, videoCopyable: false };
 }
 
-function runOnce(command, args, spawnProcess) {
+// A wedged ffprobe must not stop an export before it starts. The probe runs
+// before any encoder work, so a hang here would present as an export that never
+// begins and never explains why. Resolve rather than reject on the deadline: the
+// caller already treats an unreadable layout as "no passthrough", which is the
+// correct conservative fallback.
+const PROBE_TIMEOUT_MS = 10000;
+
+function runOnce(command, args, spawnProcess, timeoutMs = PROBE_TIMEOUT_MS) {
   const launch = spawnProcess || spawn;
   return new Promise((resolve, reject) => {
     const child = launch(command, args, { windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
     const stdout = [];
     const stderr = [];
+    let settled = false;
+    let timer = null;
+    const finish = result => { if (settled) return; settled = true; if (timer) clearTimeout(timer); resolve(result); };
+    timer = setTimeout(() => {
+      try { child.kill("SIGKILL"); } catch {}
+      finish({ code: null, timedOut: true, stdout: Buffer.concat(stdout), stderr: Buffer.concat(stderr).toString() });
+    }, Math.max(250, Number(timeoutMs) || PROBE_TIMEOUT_MS));
     child.stdout.on("data", chunk => stdout.push(chunk));
     child.stderr.on("data", chunk => stderr.push(chunk));
-    child.on("error", reject);
-    child.on("close", code => resolve({ code, stdout: Buffer.concat(stdout), stderr: Buffer.concat(stderr).toString() }));
+    child.on("error", error => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      reject(error);
+    });
+    child.on("close", code => finish({ code, stdout: Buffer.concat(stdout), stderr: Buffer.concat(stderr).toString() }));
   });
 }
 

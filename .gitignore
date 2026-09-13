@@ -13,6 +13,12 @@ build/
 artifacts/
 **/target/
 
+# Vendored media toolchain. These are build inputs, not source, and the ffmpeg
+# "full" build alone is over 200 MB -- past GitHub's per-file limit. The
+# portable build script expects bin\ffmpeg.exe (the full build, for libplacebo)
+# and bin\ffprobe.exe to be placed here before packaging.
+bin/
+
 # Runtime and test logs
 *.log
 *.err

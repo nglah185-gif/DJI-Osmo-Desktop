@@ -90,9 +90,12 @@ const HARDWARE_QUALITY = {
   h264_amf: ["-quality", "balanced", "-rc", "cqp", "-qp_i", "21", "-qp_p", "21"],
   h264_videotoolbox: ["-q:v", "55"],
   // MediaFoundation exposes a 0-100 quality scale where higher is better, the
-  // opposite direction to CRF and CQ. 60 measured 369.8 MB against libx264
-  // CRF 18's 397.3 MB on the same 4K source.
-  h264_mf: ["-rate_control", "quality", "-quality", "60"]
+  // opposite direction to CRF and CQ. 60 was originally picked to match libx264
+  // CRF 18's file size on the same source, but size is not quality: measured
+  // against a quality-100 render of the same restored picture, 60 scored 45.4 dB
+  // while 100 scored 52.0 dB, and the encode took the same time either way. This
+  // is irreplaceable camera footage, so the scale sits at its maximum.
+  h264_mf: ["-rate_control", "quality", "-quality", "100"]
 };
 
 // x264 memory scales with (threads x frame size). Left unbounded a 4K export

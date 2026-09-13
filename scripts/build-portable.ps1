@@ -11,8 +11,9 @@ $electronDist = Join-Path $projectRoot "node_modules\electron\dist"
 $appTarget = Join-Path $target "resources\app"
 
 if (-not (Test-Path $electronDist)) { throw "Electron runtime is missing. Run npm install first." }
-if (-not (Test-Path "C:\ffmpeg\bin\ffmpeg.exe")) { throw "C:\ffmpeg\bin\ffmpeg.exe is required for this build." }
-if (-not (Test-Path "C:\ffmpeg\bin\ffprobe.exe")) { throw "C:\ffmpeg\bin\ffprobe.exe is required for this build." }
+$localBin = Join-Path $projectRoot "bin"
+if (-not (Test-Path (Join-Path $localBin "ffmpeg.exe"))) { throw "bin\ffmpeg.exe is required for this build. Use the ffmpeg 'full' build (libplacebo) so GPU LUT export works." }
+if (-not (Test-Path (Join-Path $localBin "ffprobe.exe"))) { throw "bin\ffprobe.exe is required for this build." }
 
 New-Item -ItemType Directory -Force -Path $releaseRoot | Out-Null
 if (Test-Path $target) {
@@ -40,8 +41,8 @@ Get-ChildItem -LiteralPath (Join-Path $workspaceRoot "watermark") -File | ForEac
 
 $binTarget = Join-Path $target "resources\bin"
 New-Item -ItemType Directory -Force -Path $binTarget | Out-Null
-Copy-Item -LiteralPath "C:\ffmpeg\bin\ffmpeg.exe" -Destination $binTarget
-Copy-Item -LiteralPath "C:\ffmpeg\bin\ffprobe.exe" -Destination $binTarget
+Copy-Item -LiteralPath (Join-Path $localBin "ffmpeg.exe") -Destination $binTarget
+Copy-Item -LiteralPath (Join-Path $localBin "ffprobe.exe") -Destination $binTarget
 
 $electronExe = Join-Path $target "electron.exe"
 $appExe = Join-Path $target "DJI Osmo Desktop.exe"

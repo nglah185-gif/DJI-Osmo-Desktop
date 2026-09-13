@@ -1,8 +1,8 @@
 {
   "name": "dji-osmo-desktop-v2",
-  "version": "3.0.0-beta.0",
+  "version": "4.0.0-beta.0",
   "private": true,
-  "description": "DJI Osmo Desktop V2 Phase 2 media and color pipeline",
+  "description": "DJI Osmo Desktop - media library and color pipeline, GPU-accelerated export",
   "main": "src/main/main.js",
   "type": "commonjs",
   "scripts": {

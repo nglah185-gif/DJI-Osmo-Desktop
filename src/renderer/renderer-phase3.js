@@ -2,20 +2,45 @@
   const api = window.djiMedia;
   const ts = window.i18n && window.i18n.t ? (k, v) => window.i18n.t(k, v) : (k, v) => k;
   const $ = id => document.getElementById(id);
-  const { computeWindow, computePrefetchRange } = window.__vGrid;
+  const { computeWindow, computePrefetchRange, columnsFor } = window.__vGrid;
   const { sortAssets } = window.__sort;
   const { clampTimeToRange, trimFromEvent } = window.__timelineMath;
   const timelineModel = window.__timelineEditModel;
   const editorUiState = window.__editorUiState;
   const exportModalState = window.__exportModalState;
+  const batchExportState = window.__batchExportState;
+  const batchOptionsState = window.__batchExportOptions;
+  // Shared with the main process so the editor and a batch agree on which clips
+  // are D-Log and which camera transform each needs.
+  const autoRestore = window.__autoRestore;
+  const iconSet = window.__icons;
   const ThumbScheduler = window.__ThumbScheduler;
   const WM_POSITIONS = { topLeft: { x: 0, y: 0 }, topRight: { x: 1, y: 0 }, center: { x: 0.5, y: 0.5 }, bottomLeft: { x: 0, y: 1 }, bottomCenter: { x: 0.5, y: 1 }, bottomRight: { x: 1, y: 1 } };
   const EDIT_CONTROL_IDS = ["color-profile", "technical-transform", "creative-look", "trim-in", "trim-out", "speed", "rotate", "crop", "flip-h", "flip-v", "watermark", "watermark-scale", "watermark-opacity", "watermark-enable"];
-  const state = { snapshot: null, localSnapshot: null, source: "camera", settings: {}, asset: null, editor: null, mode: "browse", filter: "all", nav: "browse", sort: "latest", wmPosition: "bottomCenter", timelineZoom: 1, selectedSegmentId: null };
+  const state = { snapshot: null, localSnapshot: null, source: "camera", settings: {}, asset: null, editor: null, mode: "browse", filter: "all", nav: "browse", sort: "latest", view: "poster", wmPosition: "bottomCenter", timelineZoom: 1, selectedSegmentId: null };
   const video = $("preview-video"), image = $("color-preview"), canvas = $("preview-canvas"), grid = $("media-list") || $("media-grid"), error = $("error-banner"), errorMessage = $("error-message"), retryPreview = $("preview-retry");
-  const ITEM_H = 88, LEFT = 10, PREFETCH_AFTER = 20, NODE_LIMIT = 220;
-  const ICON_PLAY = '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M8 5v14l12-7z" fill="currentColor"/></svg>';
-  const ICON_PAUSE = '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M7 5h3.5v14H7zM13.5 5H17v14h-3.5z" fill="currentColor"/></svg>';
+  // Card geometry per view. Each entry must stay in step with the matching
+  // .media-card rules in styles.css: the grid positions cards by arithmetic and
+  // never measures them, so a mismatch shows up as overlapping or floating rows
+  // rather than as an error.
+  //
+  //   list    metadata-led. Read durations, codecs and frame rates down a column.
+  //   poster  picture-led. Find the clip you want.
+  //
+  // Poster is the default: this is a media browser, and 411 clips in a 116px
+  // thumbnail column is not a way to find anything.
+  const VIEWS = {
+    list: { itemH: 100, cardW: 320, gap: 10 },
+    poster: { itemH: 216, cardW: 248, gap: 12 }
+  };
+  const LEFT = 12, PREFETCH_AFTER = 20, NODE_LIMIT = 320;
+  const viewGeometry = () => VIEWS[state.view] || VIEWS.poster;
+  // How many cards fit across the list at its current width. Read from the
+  // element rather than tracked in state so a window resize or a layout change
+  // (the library widens when no clip is open) needs no extra bookkeeping.
+  const gridColumns = () => { const view = viewGeometry(); return columnsFor(grid.clientWidth, view.cardW, view.gap); };
+  const ICON_PLAY = iconSet.get("play");
+  const ICON_PAUSE = iconSet.get("pause");
   const fmtClock = value => { const s = Math.max(0, Number(value) || 0); const m = Math.floor(s / 60); const sec = s - m * 60; return String(m).padStart(2, "0") + ":" + sec.toFixed(3).padStart(6, "0"); };
   const fmtDuration = value => { const s = Math.max(0, Number(value) || 0); const m = Math.floor(s / 60); const sec = Math.floor(s % 60); return String(m).padStart(2, "0") + ":" + String(sec).padStart(2, "0"); };
   const showError = (message, retry = false) => { error.hidden = false; if (errorMessage) errorMessage.textContent = ts("error.prefix") + message; else error.textContent = ts("error.prefix") + message; if (retryPreview) { retryPreview.hidden = !retry; retryPreview.textContent = ts("preview.retry"); } };
@@ -157,9 +182,17 @@ function playClockSilently() {
   function stopPreviewLoop() { if (previewRaf) { cancelAnimationFrame(previewRaf); previewRaf = 0; } }
   const scheduleEdit = () => { const requestId = ++editRequestId; releaseObsoletePreviewWaiters(); clearTimeout(editTimer); editTimer = setTimeout(() => { runEditOperation(async () => { if (!state.asset || state.asset.mediaKind === "photo") return; const assetId = state.asset.id; const editor = editorFromControls(); state.editor = editor; renderExportFacts(); const isCurrent = () => requestId === editRequestId && state.asset && state.asset.id === assetId && state.mode === "edit"; try { if (state.mode !== "edit") { await setMode("edit"); } else { syncVideoClock(editor); previewEntryPaused = video.paused; setStateBadge(ts("preview.applying"), false, "preview.applying"); const request = { assetId, timelineSeconds: previewTimelineSeconds(editor), editor }; let result = await withTimeout(api.renderPreviewUpdate(request), 8000, ts("preview.timeout")); if (!result || result.updated === false) result = await withTimeout(api.renderPreviewStart(request), 8000, ts("preview.timeout")); await waitForPreviewGeneration(assetId, result && result.launchGeneration, 8000, isCurrent); if (isCurrent()) setStateBadge(ts("preview.liveEffects"), true, "preview.liveEffects"); } } catch (e) { if (isCurrent()) { try { await withTimeout(api.renderPreviewStop({ assetId }), 3000, ts("preview.timeout")); } catch {} if (e && e.message === ts("preview.timeout")) showError(e.message, true); else fail(e); setStateBadge("", false); } } }); }, 130); };
   function renderStats() { const s = scheduler.snapshot(); $("thumb-stats").textContent = "Visible: " + visibleCount + " · Requested: " + s.requested + " · Loading: " + s.loading + " · Loaded: " + s.loaded + " · Cache Hit: " + s.cacheHit + " · Error: " + s.error; }
+  // Thumbnail cache, keyed by asset AND size tier. The camera supplies a 160x90
+  // THM and a 1280x720 SCR for the same clip; the list draws 116x72 tiles from
+  // the small one and the poster grid needs the large one. Keying by asset alone
+  // served whichever was generated first, which is how the poster tiles ended up
+  // upscaling a 160px image.
   const thumbCache = new Map();
-  function enqueueThumbnail(assetId, thumb, priority) { const task = () => api.getThumbnailUrl(assetId).then(result => { if (!result) { if (thumb.isConnected) thumb.replaceChildren(makePlaceholder()); return {}; } const url = result.url || result; thumbCache.set(assetId, url); const img = new Image(); img.onload = () => { if (thumb.isConnected) thumb.replaceChildren(img); }; img.onerror = () => { if (thumb.isConnected) thumb.replaceChildren(makePlaceholder()); }; img.src = url; if (!thumb.isConnected) schedulePaint(); return { cacheHit: !!result.cacheHit }; }).catch(() => { if (thumb.isConnected) thumb.replaceChildren(makePlaceholder()); return {}; }).finally(renderStats); task.priority = priority; task.token = assetId; scheduler.enqueue(task); renderStats(); }
-  function prefetchThumbnail(assetId) { const task = () => api.getThumbnailUrl(assetId).then(result => { if (!result) return {}; const url = result.url || result; thumbCache.set(assetId, url); const img = new Image(); img.onload = () => { thumbCache.set(assetId, url); }; img.src = url; renderStats(); return { cacheHit: !!result.cacheHit }; }).catch(() => ({})).finally(renderStats); task.priority = 0; task.token = assetId; scheduler.enqueue(task); }
+  const THUMB_TIERS = { list: 116, poster: 231 };
+  const thumbMinWidth = () => THUMB_TIERS[state.view] || THUMB_TIERS.poster;
+  const thumbKey = assetId => assetId + "@" + thumbMinWidth();
+  function enqueueThumbnail(assetId, thumb, priority) { const key = thumbKey(assetId); const task = () => api.getThumbnailUrl(assetId, thumbMinWidth()).then(result => { if (!result) { if (thumb.isConnected) thumb.replaceChildren(makePlaceholder()); return {}; } const url = result.url || result; thumbCache.set(key, url); const img = new Image(); img.onload = () => { if (thumb.isConnected) thumb.replaceChildren(img); }; img.onerror = () => { if (thumb.isConnected) thumb.replaceChildren(makePlaceholder()); }; img.src = url; if (!thumb.isConnected) schedulePaint(); return { cacheHit: !!result.cacheHit }; }).catch(() => { if (thumb.isConnected) thumb.replaceChildren(makePlaceholder()); return {}; }).finally(renderStats); task.priority = priority; task.token = key; scheduler.enqueue(task); renderStats(); }
+  function prefetchThumbnail(assetId) { const key = thumbKey(assetId); const task = () => api.getThumbnailUrl(assetId, thumbMinWidth()).then(result => { if (!result) return {}; const url = result.url || result; thumbCache.set(key, url); const img = new Image(); img.src = url; renderStats(); return { cacheHit: !!result.cacheHit }; }).catch(() => ({})).finally(renderStats); task.priority = 0; task.token = key; scheduler.enqueue(task); }
   function makePlaceholder() { const el = document.createElement("span"); el.className = "thumb-placeholder"; el.dataset.i18n = "media.noThumbnail"; el.textContent = ts("media.noThumbnail"); return el; }
 
   function renderSurface(snapshot, isLocal) {
@@ -193,6 +226,15 @@ function playClockSilently() {
   function setAssetControls(asset) {
     const controlState = editorUiState.assetControlState(asset, $("watermark-enable").checked);
     document.body.classList.toggle("photo-mode", !!asset && asset.mediaKind === "photo");
+    // Drives the whole inspector layout. See the gating rules in styles.css:
+    // without a clip the colour pipeline and the timeline are inert, so the
+    // panel reports on the library instead of showing dead controls.
+    document.body.classList.toggle("has-clip", !!asset);
+    renderLibraryPanel();
+    // That class change resizes the media list, so the number of cards that fit
+    // across it changes too. The card layout is arithmetic and never measured,
+    // so it has to be recomputed rather than reflowed by the browser.
+    schedulePaint();
     EDIT_CONTROL_IDS.forEach(controlId => { const control = $(controlId); if (control) control.disabled = controlId === "watermark" ? controlState.watermarkStyleDisabled : controlState.editingDisabled; });
     $("export-button").disabled = controlState.exportDisabled || !!exportingAssetId;
     $("export-as-button").disabled = controlState.exportDisabled || !!exportingAssetId;
@@ -267,7 +309,7 @@ function playClockSilently() {
       const row = document.createElement("div"); row.className = "source-row";
       const kind = document.createElement("span"); kind.className = "source-kind"; kind.textContent = source.kind === "folder" ? "▰" : "▤"; kind.setAttribute("aria-hidden", "true");
       const sourcePath = document.createElement("span"); sourcePath.className = "source-path"; sourcePath.textContent = source.path; sourcePath.title = source.path;
-      const remove = document.createElement("button"); remove.type = "button"; remove.className = "source-remove"; remove.textContent = "×"; remove.dataset.i18nTitle = "local.remove"; remove.dataset.i18nAriaLabel = "local.remove"; remove.title = ts("local.remove"); remove.setAttribute("aria-label", ts("local.remove"));
+      const remove = document.createElement("button"); remove.type = "button"; remove.className = "source-remove"; remove.innerHTML = iconSet.get("close"); remove.dataset.i18nTitle = "local.remove"; remove.dataset.i18nAriaLabel = "local.remove"; remove.title = ts("local.remove"); remove.setAttribute("aria-label", ts("local.remove"));
       remove.addEventListener("click", async () => {
         remove.disabled = true; setLocalBusy(true);
         try { const result = await api.removeLocalSource(source); renderLocal(result.snapshot); renderLocalSources(result.sources); }
@@ -282,47 +324,159 @@ function playClockSilently() {
   sourceOverlay.addEventListener("click", event => { if (event.target === sourceOverlay) sourceOverlay.hidden = true; });
 
   const cardNodes = new Map();
+  // Batch selection lives beside, not inside, the open-a-clip action: clicking
+  // the card body still opens the editor, and only the checkbox toggles export
+  // membership. The card is a div rather than a button because an interactive
+  // element cannot legally nest inside a button.
+  const batchIds = new Set();
+  // Single refresh point for everything that reflects the selection: the
+  // floating bar over the list and the library block in the inspector. Both
+  // show the same number, so they are always repainted together.
+  function paintSelectionBar() {
+    const bar = $("selection-bar");
+    if (bar) {
+      bar.hidden = batchIds.size === 0;
+      const count = $("selection-count");
+      if (count) count.textContent = ts("batchExport.selected", { count: batchIds.size });
+    }
+    renderLibraryPanel();
+  }
+  function toggleBatchSelection(assetId) {
+    if (batchIds.has(assetId)) batchIds.delete(assetId); else batchIds.add(assetId);
+    paintSelectionBar();
+    paintGrid();
+  }
+  function clearBatchSelection() {
+    if (!batchIds.size) return;
+    batchIds.clear();
+    paintSelectionBar();
+    paintGrid();
+  }
+  // The inspector's library block. It answers the two questions that actually
+  // matter while browsing — what is selected, and where will it go — and offers
+  // the batch actions. It deliberately does not repeat the file/video/photo
+  // counts, which the filter row above the list already shows.
+  function renderLibraryPanel() {
+    const stats = $("library-stats");
+    if (!stats) return;
+    const dt = document.createElement("dt"); dt.textContent = ts("library.statSelected");
+    const dd = document.createElement("dd"); dd.textContent = String(batchIds.size);
+    stats.replaceChildren(dt, dd);
+    const destination = $("library-destination");
+    if (destination) {
+      const value = state.settings && state.settings.exportLocation ? state.settings.exportLocation : "";
+      destination.textContent = value || ts("color.unknown");
+      destination.title = value;
+    }
+    const exportButton = $("library-export-selected");
+    if (exportButton) exportButton.disabled = batchIds.size === 0 || !!exportingAssetId;
+  }
+  // Selecting a whole card at a time. Batch export is video-only: it decodes and
+  // re-encodes footage through the colour pipeline, and a still photo has no
+  // place in it. So the bulk action only targets what can actually be exported;
+  // picking photos just to have them reported as skipped helps nobody.
+  function selectAllVisible() {
+    for (const asset of activeAssets()) {
+      if (asset.mediaKind === "photo") continue;
+      batchIds.add(asset.id);
+    }
+    paintSelectionBar();
+    paintGrid();
+  }
   function createCard(asset, priority) {
-    const card = document.createElement("button"); card.type = "button"; card.className = "media-card";
+    // A div with role=button rather than a real <button>: the per-card checkbox
+    // is interactive content and cannot legally nest inside a button. body
+    // already sets --font-ui to Segoe UI, which is what the button defaulted to,
+    // so switching element type does not change the text rendering.
+    const card = document.createElement("div"); card.className = "media-card"; card.setAttribute("role", "button"); card.tabIndex = 0;
     card.dataset.assetId = asset.id;
+    // The viewport-recycling grid reuses nodes across assets, so the checkbox
+    // state is written on every paint rather than only at creation. Photos get
+    // no checkbox at all: batch export cannot take them, so offering the control
+    // only produced a selection that had to be dropped later.
+    let select = null;
+    if (asset.mediaKind !== "photo") {
+      select = document.createElement("span"); select.className = "card-select"; select.setAttribute("role", "checkbox"); select.setAttribute("aria-checked", "false"); select.tabIndex = 0;
+      select.title = ts("batchExport.select");
+      select.addEventListener("click", event => { event.preventDefault(); event.stopPropagation(); toggleBatchSelection(asset.id); });
+      select.addEventListener("keydown", event => {
+        if (event.key !== "Enter" && event.key !== " ") return;
+        event.preventDefault(); event.stopPropagation(); toggleBatchSelection(asset.id);
+      });
+    }
     const thumb = document.createElement("div"); thumb.className = "thumb";
-    if (thumbCache.has(asset.id)) { const cached = document.createElement("img"); cached.src = thumbCache.get(asset.id); thumb.appendChild(cached); } else { thumb.appendChild(makePlaceholder()); }
+    const cachedUrl = thumbCache.get(thumbKey(asset.id)); if (cachedUrl) { const cached = document.createElement("img"); cached.src = cachedUrl; thumb.appendChild(cached); } else { thumb.appendChild(makePlaceholder()); }
     const main = document.createElement("div"); main.className = "card-main";
     const name = document.createElement("strong"); name.className = "card-name"; name.textContent = asset.original.name;
     const probe = asset.original.probe || {};
+    // Each measurement is its own element rather than one joined sentence, so
+    // duration / resolution / frame rate line up as columns down the list. A
+    // shooter scanning a card compares those three across clips, and a run-on
+    // string makes that impossible.
     const meta = document.createElement("div"); meta.className = "card-meta";
-    meta.textContent = asset.mediaKind === "photo" ? [editorUiState.displayResolution(asset), (asset.original.extension || "").toUpperCase()].join("  ") : [fmtDuration(probe.duration), editorUiState.displayResolution(asset), probe.fps !== "UNKNOWN" && probe.fps ? Number(probe.fps.value).toFixed(2) + "fps" : "?"].join("  ");
+    const addMeta = (className, text) => { const span = document.createElement("span"); span.className = "card-meta-cell " + className; span.textContent = text; meta.appendChild(span); };
+    if (asset.mediaKind === "photo") {
+      addMeta("card-res", editorUiState.displayResolution(asset));
+      addMeta("card-kind", (asset.original.extension || "").toUpperCase());
+    } else {
+      addMeta("card-dur", fmtDuration(probe.duration));
+      addMeta("card-res", editorUiState.displayResolution(asset));
+      addMeta("card-fps", probe.fps !== "UNKNOWN" && probe.fps ? Number(probe.fps.value).toFixed(2) : "?");
+    }
     const badges = document.createElement("div"); badges.className = "card-badges";
-    const codec = document.createElement("span"); codec.className = "badge"; codec.textContent = (probe.codec || "?");
-    badges.appendChild(codec);
-    if (typeof probe.profile === "string" && probe.profile.includes("10")) { const ten = document.createElement("span"); ten.className = "badge"; ten.dataset.i18n = "media.tenBit"; ten.textContent = ts("media.tenBit"); badges.appendChild(ten); }
-    if (asset.mediaKind === "photo") { const photo = document.createElement("span"); photo.className = "badge"; photo.dataset.i18n = "media.photoBadge"; photo.textContent = ts("media.photoBadge"); badges.appendChild(photo); }
-    else if (asset.preview !== "UNKNOWN") { const proxy = document.createElement("span"); proxy.className = "badge proxy"; proxy.dataset.i18n = "media.lrfBadge"; proxy.textContent = ts("media.lrfBadge"); badges.appendChild(proxy); }
-    if (asset.captureMode === "SLOW_MOTION") { const slow = document.createElement("span"); slow.className = "badge slow"; slow.dataset.i18n = "media.slowMotion"; slow.textContent = ts("media.slowMotion"); badges.appendChild(slow); }
+    // Only the colour mode is allowed to carry a colour. It is the one badge
+    // that changes what the user has to do next: D-Log M needs restoration,
+    // everything else is a fact about the file, not a task. Previously codec,
+    // bit depth, LRF, slow motion and colour mode each had their own hue, which
+    // left the eye nowhere to land.
     if (/^D-Log(?:\s|$)/i.test(String(asset.djiColorMode || ""))) { const dlog = document.createElement("span"); dlog.className = "badge dlog"; dlog.dataset.i18n = "media.dlogBadge"; dlog.textContent = String(asset.djiColorMode).toUpperCase() === "D-LOG" ? "D-Log" : ts("media.dlogBadge"); badges.appendChild(dlog); }
     else if (asset.djiColorMode === "Standard") { const std = document.createElement("span"); std.className = "badge muted"; std.dataset.i18n = "color.normal"; std.textContent = ts("color.normal"); badges.appendChild(std); }
-    main.append(name, meta, badges); card.append(thumb, main);
+    if (asset.mediaKind === "photo") { const photo = document.createElement("span"); photo.className = "badge"; photo.dataset.i18n = "media.photoBadge"; photo.textContent = ts("media.photoBadge"); badges.appendChild(photo); }
+    else if (asset.preview !== "UNKNOWN") { const proxy = document.createElement("span"); proxy.className = "badge proxy"; proxy.dataset.i18n = "media.lrfBadge"; proxy.textContent = ts("media.lrfBadge"); badges.appendChild(proxy); }
+    if (typeof probe.profile === "string" && probe.profile.includes("10")) { const ten = document.createElement("span"); ten.className = "badge"; ten.dataset.i18n = "media.tenBit"; ten.textContent = ts("media.tenBit"); badges.appendChild(ten); }
+    if (asset.captureMode === "SLOW_MOTION") { const slow = document.createElement("span"); slow.className = "badge slow"; slow.dataset.i18n = "media.slowMotion"; slow.textContent = ts("media.slowMotion"); badges.appendChild(slow); }
+    main.append(name, meta, badges);
+    if (select) card.append(select);
+    card.append(thumb, main);
     card.addEventListener("click", () => open(asset.id));
+    card.addEventListener("keydown", event => {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      event.preventDefault(); open(asset.id);
+    });
     enqueueThumbnail(asset.id, thumb, priority);
-    return { card, thumb };
+    return { card, thumb, select };
   }
   function paintGrid() {
     const assets = activeAssets();
     const total = assets.length;
-    const { start, end, spacerHeight } = computeWindow({ scrollTop: grid.scrollTop, viewportHeight: grid.clientHeight, itemHeight: ITEM_H, gap: 0, columns: 1, total, overscanRows: 2 });
+    // A single column wasted most of a desktop window: browsing a 411-file card
+    // showed one 320px list with the rest of the window empty. The virtualizer
+    // has always supported multiple columns (columnsFor/computeWindow); the
+    // renderer was simply passing 1 and laying every card out on its own row.
+    const view = viewGeometry();
+    const columns = gridColumns();
+    const { start, end, spacerHeight } = computeWindow({ scrollTop: grid.scrollTop, viewportHeight: grid.clientHeight, itemHeight: view.itemH, gap: 0, columns, total, overscanRows: 2 });
     const selected = state.asset ? state.asset.id : null;
-    const firstRow = Math.floor(grid.scrollTop / ITEM_H);
-    const lastRow = Math.ceil((grid.scrollTop + grid.clientHeight) / ITEM_H);
+    const firstRow = Math.floor(grid.scrollTop / view.itemH);
+    const lastRow = Math.ceil((grid.scrollTop + grid.clientHeight) / view.itemH);
     const active = new Set();
     const fragment = document.createDocumentFragment();
     let counted = 0;
     for (let i = start; i < end; i++) {
       const asset = assets[i];
-      const row = Math.floor(i);
+      const row = Math.floor(i / columns);
+      const column = i % columns;
       let node = cardNodes.get(asset.id);
       if (!node) { node = createCard(asset, row >= firstRow && row < lastRow ? 2 : 1); cardNodes.set(asset.id, node); }
       node.card.classList.toggle("selected", asset.id === selected);
-      node.card.style.top = (LEFT + i * ITEM_H) + "px";
+      // Checkbox state is re-applied on every paint because the grid recycles
+      // one node across different assets as the viewport scrolls. Photos have no
+      // checkbox, so only the selected-card outline applies to them.
+      const picked = node.select ? batchIds.has(asset.id) : false;
+      if (node.select) node.select.setAttribute("aria-checked", picked ? "true" : "false");
+      node.card.classList.toggle("picked", picked);
+      node.card.style.top = (LEFT + row * view.itemH) + "px";
+      node.card.style.left = (LEFT + column * (view.cardW + view.gap)) + "px";
       fragment.appendChild(node.card);
       active.add(asset.id);
       if (row >= firstRow && row < lastRow) counted++;
@@ -339,6 +493,23 @@ function playClockSilently() {
 
   grid.addEventListener("scroll", schedulePaint);
   window.addEventListener("resize", () => { schedulePaint(); syncRotatedTransform(); });
+
+  // Switching view is a class change plus a repaint: the card markup is shared,
+  // and the grid recomputes its geometry from state.view. No node is rebuilt.
+  function setView(view) {
+    if (view !== "list" && view !== "poster") return;
+    state.view = view;
+    document.body.classList.toggle("view-poster", view === "poster");
+    for (const button of document.querySelectorAll("[data-view]")) button.classList.toggle("active", button.dataset.view === view);
+    // Existing cards hold an <img> already resolved at the previous tier, so they
+    // are dropped rather than reused. Rebuilding a few dozen tiles costs less
+    // than tracking which tier each loaded image came from.
+    for (const [, node] of cardNodes) node.card.remove();
+    cardNodes.clear();
+    grid.scrollTop = 0;
+    paintGrid();
+  }
+  for (const button of document.querySelectorAll("[data-view]")) button.addEventListener("click", () => setView(button.dataset.view));
 
   function setFilter(filter) { openToken++; state.filter = filter; document.querySelectorAll("[data-filter]").forEach(b => b.classList.toggle("active", b.dataset.filter === filter)); reconcileSelection(); renderEmptyState(currentSnapshot() || { assets: [] }, state.source === "local"); paintGrid(); }
   document.querySelectorAll("[data-filter]").forEach(b => b.addEventListener("click", () => setFilter(b.dataset.filter)));
@@ -364,16 +535,15 @@ function playClockSilently() {
     if (token !== openToken || !editorUiState.selectionInAssets(activeAssets(), id)) return;
     state.asset = asset;
     resetPreviewZoom(); // a new clip starts the preview at 1x zoom
-    const model = String(asset.cameraModel || "").toLowerCase();
-    const family = model.includes("action 6") ? "action6" : model.includes("action 5") ? "action5pro" : model.includes("pocket 4 pro") ? "pocket4p" : model.includes("pocket 4") ? "pocket4" : model.includes("pocket 3") ? "pocket3" : model.includes("nano") ? "osmo-nano" : "action4";
-    const colorMode = String(asset.djiColorMode || "");
-    const isDlog = /^D-Log(?:\s|$)/i.test(colorMode);
+    const family = autoRestore.familyForCameraModel(asset.cameraModel);
+    const isDlog = autoRestore.isDlogColorMode(asset.djiColorMode);
+    const technical = autoRestore.technicalTransformFor(asset);
     const autoPreset = isDlog ? family + (family === "pocket4" || family === "pocket4p" ? "-dlog" : "-dlogm") : "normal";
     const watermarks = Array.isArray(opened.watermarks) ? opened.watermarks : [];
     const watermarkId = opened.watermark && opened.watermark.id || watermarks[0] && watermarks[0].id || "none";
     const select = $("watermark");
     if (select) { select.replaceChildren(new Option(ts("watermark.none"), "none")); for (const entry of watermarks) select.appendChild(new Option(entry.name, entry.id)); }
-    state.editor = { clip: { ...opened.clip }, colorPreset: autoPreset, technicalTransform: autoPreset === "action4-dlogm" ? "action4" : autoPreset === "action5pro-dlogm" ? "action5pro" : autoPreset === "action6-dlogm" ? "action6" : autoPreset === "pocket3-dlogm" ? "pocket3" : autoPreset === "pocket4-dlog" ? "pocket4" : autoPreset === "pocket4p-dlog" ? "pocket4p" : autoPreset === "osmo-nano-dlogm" ? "osmo-nano" : "none", creativeLook: "", displayTransform: { ...opened.clip.displayTransform }, watermark: { id: watermarkId, enabled: false, scale: 0.195, opacity: 1, position: { x: 0.5, y: 1 } } };
+    state.editor = { clip: { ...opened.clip }, colorPreset: autoPreset, technicalTransform: technical, creativeLook: "", displayTransform: { ...opened.clip.displayTransform }, watermark: { id: watermarkId, enabled: false, scale: 0.195, opacity: 1, position: { x: 0.5, y: 1 } } };
     state.timelineZoom = 1;
     state.wmPosition = "bottomCenter";
     const poster = $("poster-preview");
@@ -381,7 +551,7 @@ function playClockSilently() {
     const timelineThumbs = $("timeline-thumbnails");
     if (timelineThumbs) {
       timelineThumbs.style.backgroundImage = "";
-      api.getThumbnailUrl(asset.id).then(result => { const url = result && (result.url || result); if (url && state.asset && state.asset.id === asset.id) timelineThumbs.style.backgroundImage = "url('" + String(url).replace(/'/g, "%27") + "')"; }).catch(() => {});
+      api.getThumbnailUrl(asset.id, THUMB_TIERS.list).then(result => { const url = result && (result.url || result); if (url && state.asset && state.asset.id === asset.id) timelineThumbs.style.backgroundImage = "url('" + String(url).replace(/'/g, "%27") + "')"; }).catch(() => {});
     }
     if (asset.preview !== "UNKNOWN" && asset.preview.probe && asset.preview.probe.height !== "UNKNOWN") $("proxy-label").textContent = "Proxy LRF (" + asset.preview.probe.height + "p)";
     else $("proxy-label").textContent = asset.source === "local" ? "Original (direct)" : "Original (direct, auto-fallback)";
@@ -437,9 +607,12 @@ function playClockSilently() {
   }
   function hideGenerating() { progressTrack.hidden = true; progressLabel.hidden = true; }
   function setEmptyIcon(spin) {
-    const icon = $("video-empty").querySelector("span");
+    const icon = $("video-empty").querySelector(".video-empty-icon");
+    if (!icon) return;
     icon.classList.toggle("spinning", !!spin);
-    icon.textContent = spin ? "◌" : "▶";
+    // Swap the glyph, not just the animation: a spinning play triangle reads as
+    // a decoration, while a spinner arc reads as work in progress.
+    icon.innerHTML = iconSet.get(spin ? "spinner" : "play");
   }
   // Generic "video is becoming ready" indicator (LRF fetch, buffering, seek).
   function showVideoBusy() {
@@ -953,9 +1126,9 @@ video.addEventListener("timeupdate", () => { if (state.mode === "edit" && state.
     });
     paintExportModal();
     // Reuse the grid thumbnail so the dialog cover costs no extra decode.
-    const cached = thumbCache.get(asset.id);
+    const cached = thumbCache.get(thumbKey(asset.id)) || thumbCache.get(asset.id + "@231");
     if (cached) updateExportModal(asset.id, previous => exportModalState.applyCover(previous, cached));
-    else api.getThumbnailUrl(asset.id).then(result => { const url = result && (result.url || result); if (url) updateExportModal(asset.id, previous => exportModalState.applyCover(previous, url)); }).catch(() => {});
+    else api.getThumbnailUrl(asset.id, THUMB_TIERS.poster).then(result => { const url = result && (result.url || result); if (url) updateExportModal(asset.id, previous => exportModalState.applyCover(previous, url)); }).catch(() => {});
   }
   function closeExportModal() { exportModal = null; paintExportModal(); }
   $("export-modal-close") && $("export-modal-close").addEventListener("click", closeExportModal);
@@ -967,6 +1140,228 @@ video.addEventListener("timeupdate", () => { if (state.mode === "edit" && state.
   });
   $("export-modal-reveal") && $("export-modal-reveal").addEventListener("click", () => {
     if (exportModal && exportModal.destination) api.revealPath(exportModal.destination);
+  });
+
+  // ---- Batch export ----
+  // The main process owns the queue; this only renders its snapshots. Rows are
+  // reconciled by id rather than rebuilt, because a fifty-clip batch emits a
+  // progress event per percent per clip and rebuilding the list each time would
+  // be thousands of DOM writes.
+  let batchModal = null;
+  // Setup-phase state, separate from the queue snapshot: it owns the two
+  // decisions the user makes before any work is queued.
+  let batchOptions = null;
+  const batchRowNodes = new Map();
+  function renderBatchRows(items) {
+    const list = $("batch-modal-list");
+    if (!list) return;
+    const active = new Set();
+    for (const item of items) {
+      let node = batchRowNodes.get(item.id);
+      if (!node) {
+        const row = document.createElement("div"); row.className = "batch-row"; row.setAttribute("role", "listitem");
+        const name = document.createElement("span"); name.className = "batch-row-name";
+        const bar = document.createElement("div"); bar.className = "batch-row-bar";
+        const fill = document.createElement("div"); fill.className = "batch-row-fill";
+        bar.appendChild(fill);
+        const stateText = document.createElement("span"); stateText.className = "batch-row-state";
+        row.append(name, bar, stateText);
+        node = { row, name, fill, stateText };
+        batchRowNodes.set(item.id, node);
+        list.appendChild(row);
+      }
+      node.name.textContent = item.name;
+      node.name.title = item.destination;
+      node.fill.style.width = item.barWidth;
+      // The reason lives in the tooltip: rows stay one line each so a fifty-clip
+      // batch remains scannable.
+      node.stateText.textContent = item.percentText || ts(item.statusKey);
+      node.stateText.title = item.errorMessage || "";
+      node.row.classList.toggle("failed", item.failed === true);
+      node.row.classList.toggle("done", item.state === "done");
+      // A running row with no percentage yet gets a sweeping bar instead of a
+      // frozen empty track, so the first seconds of a transcode read as work.
+      node.row.classList.toggle("indeterminate", item.indeterminate === true);
+      active.add(item.id);
+    }
+    for (const [id, node] of batchRowNodes) { if (!active.has(id)) { node.row.remove(); batchRowNodes.delete(id); } }
+  }
+  function paintBatchModal(patch = {}) {
+    const overlay = $("batch-overlay");
+    if (!overlay) return;
+    if (!batchModal) { overlay.hidden = true; return; }
+    const model = batchExportState.view(batchModal);
+    overlay.hidden = false;
+    $("batch-modal-headline").textContent = ts(model.headlineKey, model.headlineParams);
+    $("batch-modal-count").textContent = model.skipped
+      ? ts("batchExport.summarySkipped", { done: model.counts.done, total: model.counts.total, skipped: model.skipped })
+      : model.summaryText;
+    const destination = $("batch-modal-destination");
+    if (destination) { destination.textContent = batchModal.destination || ""; destination.title = batchModal.destination || ""; }
+    $("batch-modal-fill").style.width = model.overallWidth;
+    $("batch-modal-progress").classList.toggle("indeterminate", !model.settled && model.overallPercent <= 0);
+    $("batch-modal-cancel").hidden = model.cancelHidden;
+    $("batch-modal-close").hidden = model.closeHidden;
+    $("batch-modal-reveal").hidden = model.revealHidden || patch.revealHidden === true;
+    renderBatchRows(model.items);
+  }
+  function closeBatchModal() {
+    batchModal = null;
+    batchOptions = null;
+    for (const [, node] of batchRowNodes) node.row.remove();
+    batchRowNodes.clear();
+    const setupList = $("batch-setup-list");
+    if (setupList) setupList.replaceChildren();
+    paintBatchModal();
+  }
+  // The dialog has two phases in one shell: the setup sheet decides what the
+  // batch will do, then the queue's progress replaces it. Keeping both in one
+  // dialog means the user confirms and watches in the same place.
+  function openBatchDialog(phase) {
+    const overlay = $("batch-overlay");
+    if (!overlay) return;
+    overlay.hidden = false;
+    const setup = phase === "setup";
+    const setupPanel = $("batch-setup");
+    const progressPanel = $("batch-progress");
+    if (setupPanel) setupPanel.hidden = !setup;
+    if (progressPanel) progressPanel.hidden = setup;
+    if (setup) paintBatchSetup();
+  }
+  function renderBatchSetupRows(clips) {
+    const list = $("batch-setup-list");
+    if (!list) return;
+    list.replaceChildren();
+    for (const clip of clips) {
+      const row = document.createElement("div"); row.className = "batch-pick-row"; row.setAttribute("role", "listitem");
+      const name = document.createElement("span"); name.className = "batch-pick-name"; name.textContent = clip.name; name.title = clip.name;
+      row.appendChild(name);
+      if (clip.showRestore) {
+        const tag = document.createElement("span"); tag.className = "batch-pick-tag"; tag.textContent = ts("batchExport.tagRestore");
+        row.appendChild(tag);
+      }
+      list.appendChild(row);
+    }
+  }
+  function paintBatchSetup() {
+    if (!batchOptions) return;
+    const model = batchOptionsState.view(batchOptions);
+    $("batch-setup-headline").textContent = model.needsRestore ? ts("batchExport.needsRestore", { count: model.needsRestore }) : ts("batchExport.noRestore");
+    // Photos and unreadable entries are dropped before the dialog is built, so
+    // the count has to own up to the gap or the list looks short for no reason.
+    $("batch-setup-count").textContent = model.skipped
+      ? ts("batchExport.setupCountSkipped", { total: model.total, skipped: model.skipped })
+      : ts("batchExport.setupCount", { total: model.total });
+    const destination = $("batch-setup-destination");
+    if (destination) { destination.textContent = model.destination || ""; destination.title = model.destination || ""; }
+    $("batch-option-restore").checked = model.restore;
+    const watermarkBox = $("batch-option-watermark");
+    watermarkBox.checked = model.watermarkEnabled;
+    watermarkBox.disabled = model.watermarks.length === 0;
+    const select = $("batch-option-watermark-id");
+    if (select) {
+      // Rebuild only when the badge set changes; replacing the options on every
+      // paint would close the dropdown while the user is choosing from it.
+      if (select.dataset.signature !== model.watermarkSignature) {
+        select.replaceChildren();
+        for (const entry of model.watermarks) select.appendChild(new Option(entry.name, entry.id));
+        select.dataset.signature = model.watermarkSignature;
+      }
+      select.disabled = !model.watermarkEnabled;
+      select.value = model.watermarkId || "";
+    }
+    renderBatchSetupRows(model.clips);
+    $("batch-setup-start").disabled = model.startDisabled;
+  }
+  // The setup sheet is built from the main process's own view of the selection
+  // so the clips it marks D-Log are exactly the clips export will restore.
+  async function openBatchSetup() {
+    if (!batchIds.size || batchOptions || batchModal) return;
+    hideError();
+    const requested = [...batchIds];
+    $("selection-export").disabled = true;
+    try {
+      const setup = await api.batchSetup({ assetIds: requested });
+      if (!setup || !Array.isArray(setup.clips) || !setup.clips.length) { showError(ts("batchExport.nothingToExport"), false); return; }
+      batchOptions = batchOptionsState.initialState({ clips: setup.clips, watermarks: setup.watermarks, destination: setup.destination, skipped: setup.skipped });
+      openBatchDialog("setup");
+    } catch (e) {
+      fail(e);
+    } finally {
+      $("selection-export").disabled = false;
+      renderLibraryPanel();
+    }
+  }
+  async function confirmBatchExport() {
+    if (!batchOptions || !batchIds.size) return;
+    const model = batchOptionsState.view(batchOptions);
+    $("batch-setup-start").disabled = true;
+    try {
+      const result = await api.exportBatch({ assetIds: [...batchIds], colorRestore: model.restore, watermark: model.watermark });
+      if (!result || result.canceled) return;
+      if (!result.queued) { closeBatchModal(); showError(ts("batchExport.nothingToExport"), false); return; }
+      batchModal = batchExportState.initialState({ batchId: result.batchId, destination: result.destination || "", items: result.items || [], skipped: result.skipped || 0 });
+      batchOptions = null;
+      clearBatchSelection();
+      openBatchDialog("progress");
+      paintBatchModal();
+    } catch (e) {
+      fail(e);
+    } finally {
+      $("batch-setup-start").disabled = false;
+    }
+  }
+  // A single entry point for the option controls. The pure state returns the
+  // same object when nothing changed, so an idempotent change never repaints.
+  function updateBatchOptions(mutate) {
+    if (!batchOptions) return;
+    const next = mutate(batchOptions);
+    if (next === batchOptions) return;
+    batchOptions = next;
+    paintBatchSetup();
+  }
+  $("selection-export") && $("selection-export").addEventListener("click", openBatchSetup);
+  $("selection-clear") && $("selection-clear").addEventListener("click", clearBatchSelection);
+  // The inspector's library block drives the same selection as the floating bar,
+  // so batch export is discoverable without first clicking a checkbox.
+  $("library-export-selected") && $("library-export-selected").addEventListener("click", openBatchSetup);
+  $("library-select-all") && $("library-select-all").addEventListener("click", () => selectAllVisible());
+  $("library-choose-destination") && $("library-choose-destination").addEventListener("click", async () => {
+    try {
+      const directory = await api.chooseExportLocation();
+      if (!directory) return;
+      state.settings = { ...(state.settings || {}), exportLocation: directory };
+      const field = $("settings-export-location");
+      if (field) field.value = directory;
+      renderLibraryPanel();
+    } catch (error) { fail(error); }
+  });
+  $("batch-setup-cancel") && $("batch-setup-cancel").addEventListener("click", closeBatchModal);
+  $("batch-setup-start") && $("batch-setup-start").addEventListener("click", confirmBatchExport);
+  $("batch-option-restore") && $("batch-option-restore").addEventListener("change", event => updateBatchOptions(current => batchOptionsState.setRestore(current, event.target.checked)));
+  $("batch-option-watermark") && $("batch-option-watermark").addEventListener("change", event => updateBatchOptions(current => batchOptionsState.setWatermarkEnabled(current, event.target.checked)));
+  $("batch-option-watermark-id") && $("batch-option-watermark-id").addEventListener("change", event => updateBatchOptions(current => batchOptionsState.setWatermarkId(current, event.target.value)));
+  $("batch-modal-close") && $("batch-modal-close").addEventListener("click", closeBatchModal);
+  $("batch-modal-cancel") && $("batch-modal-cancel").addEventListener("click", async () => {
+    if (!batchModal || !batchModal.batchId) return;
+    $("batch-modal-cancel").disabled = true;
+    try { await api.cancelExportBatch({ batchId: batchModal.batchId }); } catch (e) { fail(e); }
+    finally { $("batch-modal-cancel").disabled = false; }
+  });
+  $("batch-modal-reveal") && $("batch-modal-reveal").addEventListener("click", () => {
+    if (!batchModal) return;
+    // shell:reveal-path only accepts an existing file, so point it at the first
+    // completed export rather than the destination folder.
+    const done = batchModal.items.find(item => item.state === "done" && item.destination);
+    if (done) api.revealPath(done.destination);
+  });
+  api.onExportBatchUpdate && api.onExportBatchUpdate(items => {
+    if (!batchModal) return;
+    const next = batchExportState.applyQueueUpdate(batchModal, items);
+    // Referentially identical means nothing visible changed; skip the paint.
+    if (next === batchModal) return;
+    batchModal = next;
+    paintBatchModal();
   });
 
   async function runExport(exportAs) {
@@ -1012,8 +1407,18 @@ video.addEventListener("timeupdate", () => { if (state.mode === "edit" && state.
     state.settings = settings || {};
     if (window.i18n && (settings.language === "en" || settings.language === "zh-CN") && window.i18n.getLanguage() !== settings.language) window.i18n.setLanguage(settings.language);
     setTimeout(() => { $("language-select").value = window.i18n.getLanguage(); $("settings-language").value = window.i18n.getLanguage(); }, 0);
+    // The destination is read from settings, so the panel cannot show it until
+    // they arrive.
+    renderLibraryPanel();
   }).catch(() => {});
   setAssetControls(null);
+  paintSelectionBar();
+  // Static markup declares data-icon and receives its glyph here, the same way
+  // data-i18n elements receive their copy. Runs before the first paint so the
+  // toolbar never shows an empty button. The view buttons are hydrated in the
+  // same pass, so their icons exist before setView reads them.
+  iconSet.hydrateIcons();
+  document.body.classList.toggle("view-poster", state.view === "poster");
   updateScanLoading(null); updateScanLoading({ stage: "DETECTING_STORAGE", completed: 0, total: 1 });
   api.scan().then(snapshot => { setScanStatus("scan.completed"); render(snapshot); }).catch(scanFailed);
   api.getLocalSnapshot().then(renderLocal).catch(() => {});

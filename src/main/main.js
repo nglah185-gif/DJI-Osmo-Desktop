@@ -10,6 +10,7 @@ const { isDirectEditCodec, isColorCriticalEditAsset } = require("../preview/prev
 const { MediaPipeline } = require("../media-pipeline");
 const { createOfficialLutRegistry } = require("../color/lut-registry");
 const { createEditorEffectGraph } = require("../color/editor-effect-graph");
+const { technicalTransformFor } = require("../color/auto-restore");
 const { ColorRenderService } = require("../renderers/color-render-service");
 const { assertSafeExportTarget } = require("../renderers/export-path-safety");
 const { PreviewFrameStreamer } = require("../renderers/preview-frame-streamer");
@@ -21,6 +22,7 @@ const { ensureFallbackProxy, cancelFallbackProxy, shutdownFallbackProxies } = re
 const { scanLocalDirectory } = require("../local-library/local-scanner");
 const { expandSelectedFiles, key: localPathKey } = require("../local-library/selected-files");
 const { normalizePathList, addSource, removeSource, isPathInside, sourceSnapshot } = require("../local-library/source-config");
+const { ExportQueue } = require("../tasks/export-queue");
 const { ConfigStore } = require("../settings/config-store");
 const { ThumbnailLocator } = require("../thumbnail/thumbnail-locator");
 const { spawn } = require("node:child_process");
@@ -62,6 +64,12 @@ const bundledFfmpeg = path.join(bundledWorkspaceRoot, "bin", "ffmpeg.exe");
 const bundledFfprobe = path.join(bundledWorkspaceRoot, "bin", "ffprobe.exe");
 if (!process.env.FFMPEG_PATH && fs.existsSync(bundledFfmpeg)) process.env.FFMPEG_PATH = bundledFfmpeg;
 if (!process.env.FFPROBE_PATH && fs.existsSync(bundledFfprobe)) process.env.FFPROBE_PATH = bundledFfprobe;
+// Development fallback: a project-local bin/ lets a GPU-capable (libplacebo)
+// ffmpeg be used without touching the machine's PATH. The portable build puts
+// the same files in resources/bin, which the checks above already prefer.
+const localBin = path.resolve(__dirname, "..", "..", "bin");
+if (!process.env.FFMPEG_PATH && fs.existsSync(path.join(localBin, "ffmpeg.exe"))) process.env.FFMPEG_PATH = path.join(localBin, "ffmpeg.exe");
+if (!process.env.FFPROBE_PATH && fs.existsSync(path.join(localBin, "ffprobe.exe"))) process.env.FFPROBE_PATH = path.join(localBin, "ffprobe.exe");
 const catalog = new InMemoryMediaCatalog();
 const localCatalog = new InMemoryMediaCatalog();
 let settingsStore = null;
@@ -76,9 +84,70 @@ const deviceProvider = new WindowsMassStorageDeviceProvider();
 const pipeline = new MediaPipeline({ deviceProvider, mediaAccess: new ReadOnlyMediaAccess(), mediaProbe: new FfprobeMediaProbe(), catalog, workspaceRoot });
 let colorRenderService = null; let watermarkRegistry = null; let previewStreamer = null; let mainWindow = null; let scanPromise = null; let localRefreshPromise = null; let localRefreshPending = false; let deviceSignature = null; let deviceWatcher = null;
 const activeExports = new Set();
+// Batch exports. Concurrency is 2: running two clips at once overlaps the gaps
+// a serial queue leaves (the card read, the encoder hand-off, ffprobe
+// validation) and measured ~1.1x. It is not a throughput fix -- a single 4K
+// D-Log export only uses ~57% of this CPU and four at once only reach ~63%, so
+// the limit is a shared serial stage (the one hardware-encoder engine), not
+// idle cores. Raising it further buys nothing and costs memory, so 2 is the
+// ceiling rather than 4.
+let exportQueue = null;
+
+// Batch items are named by their source file, so two clips called DJI_0001.MP4
+// from different folders would otherwise overwrite each other. Windows paths
+// compare case-insensitively.
+function comparablePath(value) { return process.platform === "win32" ? path.resolve(String(value)).toLowerCase() : path.resolve(String(value)); }
+function uniqueOutputPath(directory, fileName, used) {
+  const extension = path.extname(fileName);
+  const stem = path.basename(fileName, extension) || "export";
+  let candidate = path.join(directory, fileName);
+  let counter = 1;
+  while (used.has(comparablePath(candidate))) candidate = path.join(directory, stem + " (" + (++counter) + ")" + extension);
+  used.add(comparablePath(candidate));
+  return candidate;
+}
+
+// The clips a batch will actually export, and how many requested ids were
+// dropped (photos and unreadable sources). Shared by the setup sheet and the
+// export itself so the list the user confirms is the list that runs.
+function selectBatchAssets(assetIds) {
+  const ids = Array.isArray(assetIds) ? assetIds.filter(id => typeof id === "string") : [];
+  const requested = ids.map(getAssetAny).filter(Boolean);
+  const assets = requested.filter(asset => asset.original && typeof asset.original.path === "string" && asset.mediaKind !== "photo");
+  return { assets, skipped: requested.length - assets.length };
+}
+
+// The effect graph for one clip in an automatic batch. Restoration is per asset
+// because each camera family has its own Rec.709 transform; a Standard clip
+// resolves to "none" and therefore keeps the neutral graph and the fast copy
+// path. Watermarking is the caller's single decision for the whole batch.
+function batchAutoEditor(asset, { colorRestore = true, watermark = null } = {}) {
+  return {
+    technicalTransform: colorRestore ? technicalTransformFor(asset) : "none",
+    creativeLook: "",
+    watermark: watermark ? { ...watermark, enabled: true } : { enabled: false }
+  };
+}
+
+// The renderer is not trusted to name a watermark asset. Anything that is not
+// an exact registered id, or not explicitly enabled, is dropped rather than
+// passed into the graph builder.
+function sanitizeBatchWatermark(value) {
+  if (!value || typeof value !== "object" || value.enabled !== true) return null;
+  const id = typeof value.id === "string" ? value.id : "";
+  if (!id || !watermarkRegistry || !watermarkRegistry.get(id)) return null;
+  const scale = Number(value.scale);
+  const opacity = Number(value.opacity);
+  return {
+    id,
+    scale: Number.isFinite(scale) ? Math.max(0.01, Math.min(1, scale)) : 0.195,
+    opacity: Number.isFinite(opacity) ? Math.max(0, Math.min(1, opacity)) : 1,
+    position: { x: 0.5, y: 1 }
+  };
+}
 
 function registerMediaProtocol() {
-  protocol.handle("dji-media", async request => { try { const url = new URL(request.url); const parts = url.pathname.split("/").filter(Boolean); const assetId = parts.pop(); let map = authorizedPreviewPaths; if (parts[0] === "thumbnail") map = authorizedThumbnailPaths; else if (parts[0] === "poster") map = authorizedPosterPaths; else if (parts[0] === "fallback") map = authorizedFallbackPaths; else if (parts[0] === "original") map = authorizedOriginalPaths; const filePath = assetId ? map.get(decodeURIComponent(assetId)) : null; if (!filePath) return new Response("Not found", { status: 404 }); return fileResponse(filePath, request); } catch { return new Response("Bad request", { status: 400 }); } });
+  protocol.handle("dji-media", async request => { try { const url = new URL(request.url); const parts = url.pathname.split("/").filter(Boolean); const assetId = parts.pop(); let map = authorizedPreviewPaths; if (parts[0] === "thumbnail") map = authorizedThumbnailPaths; else if (parts[0] === "poster") map = authorizedPosterPaths; else if (parts[0] === "fallback") map = authorizedFallbackPaths; else if (parts[0] === "original") map = authorizedOriginalPaths; /* Only thumbnails are stored per size tier; every other route keys by id alone. */ const tier = parts[0] === "thumbnail" ? url.searchParams.get("w") : null; const key = assetId ? decodeURIComponent(assetId) + (tier ? "@" + tier : "") : null; const filePath = key ? map.get(key) || map.get(decodeURIComponent(assetId)) : null; if (!filePath) return new Response("Not found", { status: 404 }); return fileResponse(filePath, request); } catch { return new Response("Bad request", { status: 400 }); } });
 }
 
 async function scan() {
@@ -153,12 +222,44 @@ async function graphForEditor(editor = {}) {
   }
   return createEffectGraph({ ...graph, displayGeometry: { ...graph.displayGeometry, ...(transform || {}) }, overlays: active ? [{ kind: "image", path: overlay.path, resourceId: overlay.id, sha256: overlay.sha256, inkBox: inkBox || null, canvasSize: inkBox && inkBox.canvas ? inkBox.canvas : null, position: editor.watermark.position, scale: editor.watermark.scale, opacity: editor.watermark.opacity, rotation: editor.watermark.rotation, enabled: true }] : [] });
 }
-function validateExport(outputPath) { return new Promise((resolve, reject) => { const child = spawn(process.env.FFPROBE_PATH || "ffprobe", ["-v", "error", "-show_entries", "format=size,duration:stream=codec_type,codec_name,width,height,avg_frame_rate", "-of", "json", outputPath], { windowsHide: true, stdio: ["ignore", "pipe", "pipe"] }); const out = []; const err = []; child.stdout.on("data", chunk => out.push(chunk)); child.stderr.on("data", chunk => err.push(chunk)); child.on("error", reject); child.on("close", code => code === 0 ? resolve({ exists: true, ...JSON.parse(Buffer.concat(out).toString()) }) : reject(new Error(Buffer.concat(err).toString()))); }); }
+// Confirm the finished file before the atomic rename puts it in place.
+//
+// Parsing happens inside a try: a successful ffprobe that prints something
+// unexpected used to throw out of the close handler, and an exception there is
+// uncaught in the main process -- the whole app died because one export
+// returned odd JSON. A deadline matters for the same reason as the probe: ffmpeg
+// can leave a file ffprobe will wait on forever.
+const VALIDATE_TIMEOUT_MS = 20000;
+function validateExport(outputPath) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.env.FFPROBE_PATH || "ffprobe", ["-v", "error", "-show_entries", "format=size,duration:stream=codec_type,codec_name,width,height,avg_frame_rate", "-of", "json", outputPath], { windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
+    const out = [];
+    const err = [];
+    let settled = false;
+    let timer = null;
+    const finish = (error, value) => { if (settled) return; settled = true; if (timer) clearTimeout(timer); if (error) reject(error); else resolve(value); };
+    timer = setTimeout(() => { try { child.kill("SIGKILL"); } catch {} finish(new Error("Export validation timed out after " + (VALIDATE_TIMEOUT_MS / 1000) + "s: " + outputPath)); }, VALIDATE_TIMEOUT_MS);
+    child.stdout.on("data", chunk => out.push(chunk));
+    child.stderr.on("data", chunk => err.push(chunk));
+    child.on("error", error => finish(error));
+    child.on("close", code => {
+      if (code !== 0) { finish(new Error(Buffer.concat(err).toString() || ("ffprobe exited with code " + code))); return; }
+      try { finish(null, { exists: true, ...JSON.parse(Buffer.concat(out).toString()) }); }
+      catch (error) { finish(new Error("Export validation returned unreadable output: " + error.message)); }
+    });
+  });
+}
+// Batch exports run several of these against the same destination directory.
+// pid+Date.now() is millisecond resolution, so two exports starting in the same
+// tick produced the SAME temporary name: one export would then rename the
+// other's half-written file into place, or delete it on failure. A monotonic
+// counter makes the name unique regardless of timing.
+let exportSequence = 0;
 async function exportAtomically(inputPath, outputPath, graph, clip, onProgress, signal = null) {
   // Validate the final path before creating a temporary export. Checking only
   // the temporary path lets Export As target the source and later delete it.
   assertSafeExportTarget(inputPath, outputPath);
-  const temporaryPath = path.join(path.dirname(outputPath), ".dji-export-" + process.pid + "-" + Date.now() + ".mp4");
+  const temporaryPath = path.join(path.dirname(outputPath), ".dji-export-" + process.pid + "-" + (++exportSequence) + "-" + Date.now() + ".mp4");
   try {
     const exported = await colorRenderService.exportOriginal(inputPath, temporaryPath, graph, null, null, clip, onProgress, signal);
     const validation = await validateExport(temporaryPath);
@@ -185,6 +286,10 @@ if (singleInstanceLock) app.whenReady().then(() => {
   const previewLutRegistry = createOfficialLutRegistry(workspaceRoot);
   const generatedCacheRoot = path.join(app.getPath("userData"), "generated-luts");
   colorRenderService = new ColorRenderService({ root: workspaceRoot, lutRegistry: previewLutRegistry, styleRegistry: null, cacheRoot: generatedCacheRoot });
+  exportQueue = new ExportQueue({
+    concurrency: 2,
+    onUpdate: items => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send("export:batch-update", items); }
+  });
   previewStreamer = new PreviewFrameStreamer({ lutRegistry: previewLutRegistry, styleRegistry: null, cacheRoot: generatedCacheRoot, width: 640, height: 360 });
   registerMediaProtocol();
   ipcMain.handle("media:scan", async () => scan()); ipcMain.handle("media:snapshot", () => catalog.getSnapshot());
@@ -199,7 +304,33 @@ if (singleInstanceLock) app.whenReady().then(() => {
   ipcMain.handle("settings:choose-export-location", async () => { const picked = await dialog.showOpenDialog({ properties: ["openDirectory", "createDirectory"] }); if (picked.canceled || !picked.filePaths.length) return settingsStore.get("exportLocation") || ""; settingsStore.set("exportLocation", picked.filePaths[0]); return picked.filePaths[0]; });
   ipcMain.handle("media:preview-url", async (_event, assetId) => { if (typeof assetId !== "string") return null; const asset = getAssetAny(assetId); if (!asset) return null; if (asset.mediaKind === "photo") { authorizedOriginalPaths.set(assetId, asset.original.path); return { url: "dji-media://asset/original/" + encodeURIComponent(assetId), sourceType: "PHOTO" }; } const resolved = previewResolver.resolve(asset); if (resolved.status === "READY") { authorizedPreviewPaths.set(assetId, resolved.path); return { url: "dji-media://asset/" + encodeURIComponent(assetId), sourceType: "LRF_PROXY" }; } authorizedOriginalPaths.set(assetId, asset.original.path); return { url: "dji-media://asset/original/" + encodeURIComponent(assetId), sourceType: "ORIGINAL" }; });
   ipcMain.handle("media:preview-fallback", async (_event, assetId) => { if (typeof assetId !== "string") return null; const asset = getAssetAny(assetId); if (!asset) return null; const durationSeconds = Number(asset.original && asset.original.probe && asset.original.probe.duration) || 0; const sendProgress = pct => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send("media:preview-progress", { assetId, pct }); }; try { const proxy = await ensureFallbackProxy({ assetId, originalPath: asset.original.path, cacheRoot: path.join(app.getPath("userData"), "cache", "fallbacks"), durationSeconds, onProgress: pct => { sendProgress(pct); } }); if (proxy) { authorizedFallbackPaths.set(assetId, proxy); sendProgress(100); return { url: "dji-media://asset/fallback/" + encodeURIComponent(assetId), sourceType: "ORIGINAL_FALLBACK" }; } } catch (error) { console.error("Fallback failed:", error); } return null; });
-  ipcMain.handle("media:thumbnail-url", async (_event, assetId) => { if (typeof assetId !== "string") return null; const asset = getAssetAny(assetId); if (!asset) return null; const resolved = previewResolver.resolve(asset); try { const found = thumbnailLocator.locate(asset); const cacheRoot = path.join(app.getPath("userData"), "cache", "thumbnails"); const cacheHit = fs.existsSync(resolveCachePath({ assetId, thmPath: found.thm, scrPath: found.scr, originalPath: asset.original.path, cacheRoot })); const thumbnail = await ensureThumbnail({ assetId, previewPath: resolved.status === "READY" ? resolved.path : null, originalPath: asset.original.path, thmPath: found.thm, scrPath: found.scr, cacheRoot }); if (thumbnail) { authorizedThumbnailPaths.set(assetId, thumbnail); return { url: "dji-media://asset/thumbnail/" + encodeURIComponent(assetId), cacheHit }; } } catch (error) { console.error("Thumbnail failed:", error); } return null; });
+  // minWidth lets the caller state how large the tile it will draw is. The
+  // camera writes a 160x90 THM beside a 1280x720 SCR, so the same clip needs the
+  // small file for a dense list and the large one for the poster grid; serving
+  // the THM in both cases is what made the poster tiles soft. A plain string is
+  // still accepted so existing callers keep working.
+  ipcMain.handle("media:thumbnail-url", async (_event, request) => {
+    const assetId = typeof request === "string" ? request : request && request.assetId;
+    const minWidth = typeof request === "object" && request ? Number(request.minWidth) || 0 : 0;
+    if (typeof assetId !== "string") return null;
+    const asset = getAssetAny(assetId); if (!asset) return null;
+    const resolved = previewResolver.resolve(asset);
+    try {
+      const found = thumbnailLocator.locate(asset);
+      const cacheRoot = path.join(app.getPath("userData"), "cache", "thumbnails");
+      const cacheHit = fs.existsSync(resolveCachePath({ assetId, thmPath: found.thm, scrPath: found.scr, originalPath: asset.original.path, cacheRoot, minWidth }));
+      const thumbnail = await ensureThumbnail({ assetId, previewPath: resolved.status === "READY" ? resolved.path : null, originalPath: asset.original.path, thmPath: found.thm, scrPath: found.scr, cacheRoot, minWidth });
+      if (thumbnail) {
+        // The size tier is part of both the authorization key and the URL. The
+        // file behind the URL changes with the tier, and Chromium caches by URL
+        // alone, so a shared URL would keep serving the tier it fetched first.
+        const key = assetId + "@" + minWidth;
+        authorizedThumbnailPaths.set(key, thumbnail);
+        return { url: "dji-media://asset/thumbnail/" + encodeURIComponent(assetId) + "?w=" + minWidth, cacheHit };
+      }
+    } catch (error) { console.error("Thumbnail failed:", error); }
+    return null;
+  });
   ipcMain.handle("media:poster-url", async (_event, assetId) => { if (typeof assetId !== "string") return null; const asset = getAssetAny(assetId); if (!asset) return null; const resolved = previewResolver.resolve(asset); try { const found = thumbnailLocator.locate(asset); const posterRoot = path.join(app.getPath("userData"), "cache", "posters"); const poster = await ensurePoster({ assetId, previewPath: resolved.status === "READY" ? resolved.path : null, originalPath: asset.original.path, scrPath: found.scr, posterRoot }); if (poster) { authorizedPosterPaths.set(assetId, poster); return "dji-media://asset/poster/" + encodeURIComponent(assetId); } } catch (error) { console.error("Poster failed:", error); } return null; });
   ipcMain.handle("editor:open", (_event, assetId) => { const asset = getAssetAny(assetId); if (!asset) throw new Error("Asset unavailable"); const watermarks = watermarkRegistry ? watermarkRegistry.forCameraModel(asset.cameraModel) : []; const watermark = watermarks[0] || (watermarkRegistry && watermarkRegistry.get("action4.official.oa4")); return { asset, clip: createTimelineClip(asset), colorMode: "UNKNOWN", looks: [...colorPresets.keys()], watermark, watermarks }; });
   ipcMain.handle("editor:preview-frame", async (_event, args = {}) => { const asset = getAssetAny(args.assetId); if (!asset) throw new Error("Asset unavailable"); const resolved = previewResolver.resolve(asset); let sourcePath = resolved.status === "READY" ? resolved.path : null; if (!sourcePath) sourcePath = asset.original && asset.original.path ? asset.original.path : null; if (!sourcePath) sourcePath = await ensureFallbackProxy({ assetId: asset.id, originalPath: asset.original.path, cacheRoot: path.join(app.getPath("userData"), "cache", "fallbacks") }); if (!sourcePath) throw new Error("Edit preview requires an LRF companion or a decodable original"); const graph = await graphForEditor(args.editor); const seconds = Number(args.timelineSeconds || 0) * Number(args.editor?.clip?.playbackRate || 1) + Number(args.editor?.clip?.sourceInUs || 0) / 1000000; return colorRenderService.renderPreviewFrame(sourcePath, seconds, graph, 1280, 720); });
@@ -226,6 +357,89 @@ ipcMain.handle("editor:preview-pause", (_event, args = {}) => previewStreamer.pa
   ipcMain.handle("editor:export", (_event, args = {}) => runExportIpc(_event, args, asset => { const exportDir = settingsStore.get("exportLocation") || app.getPath("videos"); return colorRenderService.defaultExportPath(asset.original.name, "phase4", exportDir); }));
   ipcMain.handle("editor:export-as", (_event, args = {}) => runExportIpc(_event, args, async asset => { const picked = await dialog.showSaveDialog({ defaultPath: path.join(settingsStore.get("exportLocation") || app.getPath("videos"), path.basename(asset.original.name, path.extname(asset.original.name)) + ".phase4.mp4"), filters: [{ name: "MP4", extensions: ["mp4"] }] }); return picked.canceled || !picked.filePath ? null : picked.filePath; }));
   ipcMain.handle("editor:export-cancel", () => { for (const controller of activeExports) controller.abort(); return { canceled: activeExports.size > 0 }; });
+  // Fills the batch setup sheet before anything is queued. Detection happens
+  // here rather than in the renderer so the clips the sheet calls D-Log are
+  // exactly the clips export will restore; the renderer never gets a second,
+  // possibly divergent, opinion.
+  ipcMain.handle("library:batch-setup", async (_event, args = {}) => {
+    const { assets, skipped } = selectBatchAssets(args.assetIds);
+    const destination = settingsStore.get("exportLocation") || app.getPath("videos");
+    const watermarks = [];
+    const seen = new Set();
+    const addWatermark = entry => {
+      if (!entry || seen.has(entry.id)) return;
+      seen.add(entry.id);
+      watermarks.push({ id: entry.id, name: entry.name });
+    };
+    for (const asset of assets) {
+      if (!watermarkRegistry) break;
+      for (const entry of watermarkRegistry.forCameraModel(asset.cameraModel)) addWatermark(entry);
+    }
+    // A camera family with no matching badge still offers the default, which is
+    // what the single-clip editor falls back to as well.
+    if (!watermarks.length && watermarkRegistry) addWatermark(watermarkRegistry.get("action4.official.oa4"));
+    return {
+      destination,
+      skipped,
+      watermarks,
+      clips: assets.map(asset => ({
+        assetId: asset.id,
+        name: asset.original.name,
+        needsRestore: technicalTransformFor(asset) !== "none"
+      }))
+    };
+  });
+  // Batch export. Every selected clip is queued into the configured export
+  // location.
+  //
+  // Deliberately no folder dialog: the single-item export already writes to the
+  // configured location without asking, and prompting once per batch would be
+  // exactly the friction batch export exists to remove. The location stays
+  // changeable from Settings, and the dialog reports where the files landed.
+  //
+  // Restoration is per clip: a D-Log clip gets its own camera's Rec.709
+  // transform and takes the transcode path, while a Standard clip stays on the
+  // neutral graph and keeps the cable-speed copy path. Watermarking, when
+  // enabled, forces every clip through a transcode because it alters pixels.
+  ipcMain.handle("library:export-batch", async (event, args = {}) => {
+    if (!exportQueue) throw new Error("Export queue is not ready");
+    const { assets, skipped } = selectBatchAssets(args.assetIds);
+    if (!assets.length) return { canceled: false, batchId: null, queued: 0, skipped, destination: "" };
+    const destination = settingsStore.get("exportLocation") || app.getPath("videos");
+    const colorRestore = args.colorRestore !== false;
+    const watermark = sanitizeBatchWatermark(args.watermark);
+
+    // Photos and stream-copy targets still need a unique name each, and a clip
+    // must never be exported on top of its own source.
+    const used = new Set(assets.map(asset => comparablePath(asset.original.path)));
+    const batchId = "batch-" + Date.now() + "-" + Math.random().toString(36).slice(2, 8);
+    const queued = [];
+    for (const asset of assets) {
+      const outputPath = uniqueOutputPath(destination, asset.original.name, used);
+      const itemId = batchId + ":" + asset.id;
+      // Graphs are built per asset because the transform differs by camera.
+      // Building one is cheap and does no I/O until the watermark ink box has to
+      // be measured, which is cached by content hash across the batch.
+      const graph = await graphForEditor(batchAutoEditor(asset, { colorRestore, watermark }));
+      queued.push({ itemId, assetId: asset.id, name: asset.original.name, outputPath });
+      exportQueue.add({
+        id: itemId,
+        batchId,
+        assetId: asset.id,
+        label: asset.original.name,
+        destination: outputPath,
+        run: ({ signal, onProgress }) => exportAtomically(asset.original.path, outputPath, graph, null, pct => onProgress(pct), signal)
+      });
+    }
+    return { canceled: false, batchId, queued: queued.length, skipped, destination, items: queued };
+  });
+  // Cancel one batch item, or a whole batch when only batchId is supplied.
+  ipcMain.handle("library:export-batch-cancel", (_event, args = {}) => {
+    if (!exportQueue) return { canceled: 0 };
+    if (typeof args.itemId === "string" && args.itemId) return { canceled: exportQueue.cancel(args.itemId) ? 1 : 0 };
+    if (typeof args.batchId === "string" && args.batchId) return { canceled: exportQueue.cancelBatch(args.batchId) };
+    return { canceled: exportQueue.cancelAll() };
+  });
   // Reveal only an existing absolute file. showItemInFolder is a shell call, so
   // a relative or missing path must not reach it from the renderer.
   ipcMain.handle("shell:reveal-path", async (_event, target) => { const text = String(target || ""); if (!text || !path.isAbsolute(text)) return { revealed: false }; try { const stat = await fs.promises.stat(text); if (!stat.isFile()) return { revealed: false }; } catch { return { revealed: false }; } shell.showItemInFolder(text); return { revealed: true }; });

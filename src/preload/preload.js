@@ -5,7 +5,7 @@ contextBridge.exposeInMainWorld("djiMedia", Object.freeze({
   getSnapshot: () => ipcRenderer.invoke("media:snapshot"),
   getPreviewUrl: assetId => ipcRenderer.invoke("media:preview-url", assetId),
   getPreviewFallback: assetId => ipcRenderer.invoke("media:preview-fallback", assetId),
-  getThumbnailUrl: assetId => ipcRenderer.invoke("media:thumbnail-url", assetId),
+  getThumbnailUrl: (assetId, minWidth) => ipcRenderer.invoke("media:thumbnail-url", { assetId, minWidth }),
   getPosterUrl: assetId => ipcRenderer.invoke("media:poster-url", assetId),
   openEditor: assetId => ipcRenderer.invoke("editor:open", assetId),
   renderEditPreview: request => ipcRenderer.invoke("editor:preview-frame", request),
@@ -21,6 +21,9 @@ contextBridge.exposeInMainWorld("djiMedia", Object.freeze({
   exportEdit: request => ipcRenderer.invoke("editor:export", request),
   exportEditAs: request => ipcRenderer.invoke("editor:export-as", request),
   cancelExport: () => ipcRenderer.invoke("editor:export-cancel"),
+  exportBatch: request => ipcRenderer.invoke("library:export-batch", request),
+  batchSetup: request => ipcRenderer.invoke("library:batch-setup", request),
+  cancelExportBatch: request => ipcRenderer.invoke("library:export-batch-cancel", request),
   revealPath: target => ipcRenderer.invoke("shell:reveal-path", target),
   getLocalSnapshot: () => ipcRenderer.invoke("library:local-snapshot"),
   addLocalFolder: () => ipcRenderer.invoke("library:add-folder"),
@@ -48,5 +51,6 @@ contextBridge.exposeInMainWorld("djiMedia", Object.freeze({
   onPreviewFrame: callback => { if (typeof callback !== "function") return () => {}; const listener = (_event, frame) => callback(frame); ipcRenderer.on("preview:frame", listener); return () => ipcRenderer.removeListener("preview:frame", listener); },
   onPreviewError: callback => { if (typeof callback !== "function") return () => {}; const listener = (_event, error) => callback(error); ipcRenderer.on("preview:error", listener); return () => ipcRenderer.removeListener("preview:error", listener); },
   onPreviewEnded: callback => { if (typeof callback !== "function") return () => {}; const listener = (_event, details) => callback(details); ipcRenderer.on("preview:ended", listener); return () => ipcRenderer.removeListener("preview:ended", listener); },
-  onExportProgress: callback => { if (typeof callback !== "function") return () => {}; const listener = (_event, progress) => callback(progress); ipcRenderer.on("export:progress", listener); return () => ipcRenderer.removeListener("export:progress", listener); }
+  onExportProgress: callback => { if (typeof callback !== "function") return () => {}; const listener = (_event, progress) => callback(progress); ipcRenderer.on("export:progress", listener); return () => ipcRenderer.removeListener("export:progress", listener); },
+  onExportBatchUpdate: callback => { if (typeof callback !== "function") return () => {}; const listener = (_event, items) => callback(items); ipcRenderer.on("export:batch-update", listener); return () => ipcRenderer.removeListener("export:batch-update", listener); }
 }));

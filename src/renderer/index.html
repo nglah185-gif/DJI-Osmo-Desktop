@@ -12,25 +12,30 @@
     <nav class="app-nav" aria-label="Workspace"><span class="nav-title" data-i18n="nav.browse">Browse</span></nav>
     <div class="device-title" id="device-title" data-i18n="app.scanning">Scanning</div>
     <div class="topbar-actions">
-      <label class="language-picker"><span class="globe">🌐</span><select id="language-select"><option value="en">English</option><option value="zh-CN">简体中文</option></select></label>
-      <button class="icon-button settings" id="settings-button" type="button" title="Settings" aria-label="Settings" data-i18n-title="aria.settings" data-i18n-aria-label="aria.settings"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8zm9.4 4a7.4 7.4 0 0 0-.1-1.2l2-1.5-2-3.4-2.3.9a7.6 7.6 0 0 0-2-1.2L16.5 3h-4l-.5 2.6a7.6 7.6 0 0 0-2 1.2l-2.3-.9-2 3.4 2 1.5a7.4 7.4 0 0 0 0 2.4l-2 1.5 2 3.4 2.3-.9a7.6 7.6 0 0 0 2 1.2l.5 2.6h4l.5-2.6a7.6 7.6 0 0 0 2-1.2l2.3.9 2-3.4-2-1.5c.1-.4.1-.8.1-1.2z" fill="currentColor"/></svg></button>
+      <label class="language-picker"><span class="globe" data-icon="globe"></span><select id="language-select"><option value="en">English</option><option value="zh-CN">简体中文</option></select></label>
+      <button class="icon-button settings" id="settings-button" type="button" title="Settings" aria-label="Settings" data-i18n-title="aria.settings" data-i18n-aria-label="aria.settings" data-icon="settings"></button>
     </div>
   </header>
   <main class="workspace">
     <aside class="library-panel" aria-label="Media library">
       <div class="panel-heading"><h1 data-i18n="library.title">Media Library</h1></div>
-      <div class="scan-row"><span class="scan-status"><svg class="check" viewBox="0 0 24 24" width="13" height="13"><path d="M20 6L9 17l-5-5" fill="none" stroke="currentColor" stroke-width="2.4"/></svg><span data-i18n="scan.completed">Scan completed</span></span><span class="scan-files" id="scan-files">0 <span data-i18n="scan.filesLabel">files</span></span><button class="rescan-button" id="rescan-button" data-i18n="scan.rescan">Rescan</button></div>
-      <div class="source-switch"><span data-i18n="src.label">Source</span><button type="button" data-source="camera" class="active" data-i18n="src.camera">Camera</button><button type="button" data-source="local" data-i18n="src.local">Local Library</button><div class="local-actions" id="local-actions" hidden><button id="add-folder-button" type="button" data-i18n="local.addFolder">Add Folder</button><button id="import-files-button" type="button" data-i18n="local.importFiles">Import Files</button><button class="compact-action" id="refresh-local-button" type="button" title="Refresh local library" aria-label="Refresh local library" data-i18n-title="local.refresh" data-i18n-aria-label="local.refresh">↻</button><button class="compact-action" id="manage-local-button" type="button" title="Manage sources" aria-label="Manage sources" data-i18n-title="local.manage" data-i18n-aria-label="local.manage">⋯</button></div></div><div class="library-filter" id="library-filter"><button class="filter-tab active" data-filter="all"><span data-i18n="filter.all">All</span> <span class="filter-count" id="count-all">0</span></button><button class="filter-tab" data-filter="videos"><span data-i18n="filter.videos">Videos</span> <span class="filter-count" id="count-videos">0</span></button><button class="filter-tab" data-filter="photos"><span data-i18n="filter.photos">Photos</span> <span class="filter-count" id="count-photos">0</span></button><label class="sort-select"><span data-i18n="sort.label">Sort</span><select id="sort-select"><option value="latest" data-i18n="sort.latest">Latest</option><option value="oldest" data-i18n="sort.oldest">Oldest</option><option value="duration-desc" data-i18n="sort.durationDesc">Duration (long)</option><option value="duration-asc" data-i18n="sort.durationAsc">Duration (short)</option><option value="resolution-desc" data-i18n="sort.resolutionDesc">Resolution (hi)</option><option value="resolution-asc" data-i18n="sort.resolutionAsc">Resolution (lo)</option><option value="fps-desc" data-i18n="sort.fpsDesc">FPS (hi)</option><option value="fps-asc" data-i18n="sort.fpsAsc">FPS (lo)</option><option value="size-desc" data-i18n="sort.sizeDesc">Size (big)</option><option value="size-asc" data-i18n="sort.sizeAsc">Size (small)</option><option value="name-asc" data-i18n="sort.nameAsc">Name A-Z</option><option value="name-desc" data-i18n="sort.nameDesc">Name Z-A</option></select></label></div>
+      <div class="scan-row"><span class="scan-status"><span class="check" data-icon="check"></span><span data-i18n="scan.completed">Scan completed</span></span><span class="scan-files" id="scan-files">0 <span data-i18n="scan.filesLabel">files</span></span><button class="rescan-button" id="rescan-button" data-i18n="scan.rescan">Rescan</button></div>
+      <div class="source-switch"><span data-i18n="src.label">Source</span><button type="button" data-source="camera" class="active" data-i18n="src.camera">Camera</button><button type="button" data-source="local" data-i18n="src.local">Local Library</button><div class="local-actions" id="local-actions" hidden><button id="add-folder-button" type="button" data-i18n="local.addFolder">Add Folder</button><button id="import-files-button" type="button" data-i18n="local.importFiles">Import Files</button><button class="compact-action" id="refresh-local-button" type="button" title="Refresh local library" aria-label="Refresh local library" data-i18n-title="local.refresh" data-i18n-aria-label="local.refresh" data-icon="refresh"></button><button class="compact-action" id="manage-local-button" type="button" title="Manage sources" aria-label="Manage sources" data-i18n-title="local.manage" data-i18n-aria-label="local.manage" data-icon="more"></button></div></div><div class="library-filter" id="library-filter"><button class="filter-tab active" data-filter="all"><span data-i18n="filter.all">All</span> <span class="filter-count" id="count-all">0</span></button><button class="filter-tab" data-filter="videos"><span data-i18n="filter.videos">Videos</span> <span class="filter-count" id="count-videos">0</span></button><button class="filter-tab" data-filter="photos"><span data-i18n="filter.photos">Photos</span> <span class="filter-count" id="count-photos">0</span></button><div class="view-toggle" id="view-toggle" role="group" data-i18n-aria-label="library.view"><button type="button" data-view="list" data-icon="list" data-i18n-title="library.viewList" data-i18n-aria-label="library.viewList"></button><button type="button" data-view="poster" class="active" data-icon="grid" data-i18n-title="library.viewPoster" data-i18n-aria-label="library.viewPoster"></button></div><label class="sort-select"><span data-i18n="sort.label">Sort</span><select id="sort-select"><option value="latest" data-i18n="sort.latest">Latest</option><option value="oldest" data-i18n="sort.oldest">Oldest</option><option value="duration-desc" data-i18n="sort.durationDesc">Duration (long)</option><option value="duration-asc" data-i18n="sort.durationAsc">Duration (short)</option><option value="resolution-desc" data-i18n="sort.resolutionDesc">Resolution (hi)</option><option value="resolution-asc" data-i18n="sort.resolutionAsc">Resolution (lo)</option><option value="fps-desc" data-i18n="sort.fpsDesc">FPS (hi)</option><option value="fps-asc" data-i18n="sort.fpsAsc">FPS (lo)</option><option value="size-desc" data-i18n="sort.sizeDesc">Size (big)</option><option value="size-asc" data-i18n="sort.sizeAsc">Size (small)</option><option value="name-asc" data-i18n="sort.nameAsc">Name A-Z</option><option value="name-desc" data-i18n="sort.nameDesc">Name Z-A</option></select></label></div>
       <div id="media-grid" class="media-list" tabindex="0" aria-label="Media assets" data-i18n-aria-label="aria.mediaAssets"><div class="grid-spacer" id="grid-spacer"></div><div class="scan-loading" id="scan-loading"><div class="scan-loading-icon">⟳</div><p id="scan-loading-text" data-i18n="scan.loading">Loading media...</p><div class="progress-track"><div class="progress-fill" id="scan-loading-fill"></div></div></div></div>
       <div id="empty-state" hidden><h2 hidden></h2><p hidden></p></div>
+      <div class="selection-bar" id="selection-bar" hidden>
+        <span class="selection-count" id="selection-count"></span>
+        <button type="button" id="selection-clear" data-i18n="batchExport.clear">Clear</button>
+        <button type="button" class="primary" id="selection-export" data-i18n="batchExport.exportSelected">Export selected</button>
+      </div>
     </aside>
     <section class="preview-panel" aria-label="Preview" data-i18n-aria-label="aria.preview">
-      <div class="video-shell"><div class="shell-content"><video id="preview-video" playsinline preload="metadata"></video><img id="poster-preview" alt="" hidden><img id="color-preview" alt="" hidden><canvas id="preview-canvas" hidden></canvas></div><span class="preview-state zoom-badge" id="zoom-badge" hidden></span><div class="video-empty" id="video-empty"><span>▶</span><p id="video-empty-text" data-i18n="preview.lrf">LRF preview will appear here</p><div class="progress-track" id="preview-progress" hidden><div class="progress-fill" id="preview-progress-fill"></div></div><span class="progress-label" id="preview-progress-label" hidden></span></div></div>
+      <div class="video-shell"><div class="shell-content"><video id="preview-video" playsinline preload="metadata"></video><img id="poster-preview" alt="" hidden><img id="color-preview" alt="" hidden><canvas id="preview-canvas" hidden></canvas></div><span class="preview-state zoom-badge" id="zoom-badge" hidden></span><div class="video-empty" id="video-empty"><span class="video-empty-icon" data-icon="play"></span><p id="video-empty-text" data-i18n="preview.lrf">LRF preview will appear here</p><div class="progress-track" id="preview-progress" hidden><div class="progress-fill" id="preview-progress-fill"></div></div><span class="progress-label" id="preview-progress-label" hidden></span></div></div>
       <div class="inner-player">
         <div class="player-controls">
-          <button class="icon-button" id="btn-prev" type="button" aria-label="Previous" data-i18n-aria-label="aria.previous" disabled><svg viewBox="0 0 24 24" width="14" height="14"><path d="M6 5h2v14H6zM20 5v14L9.5 12z" fill="currentColor"/></svg></button>
+          <button class="icon-button" id="btn-prev" type="button" aria-label="Previous" data-i18n-aria-label="aria.previous" disabled><span data-icon="prev"></span></button>
           <button class="icon-button play-button" id="play-button" type="button" aria-label="Play" data-i18n-aria-label="player.play" disabled></button>
-          <button class="icon-button" id="btn-next" type="button" aria-label="Next" data-i18n-aria-label="aria.next" disabled><svg viewBox="0 0 24 24" width="14" height="14"><path d="M16 5h2v14h-2zM4 5v14l10.5-7z" fill="currentColor"/></svg></button>
+          <button class="icon-button" id="btn-next" type="button" aria-label="Next" data-i18n-aria-label="aria.next" disabled><span data-icon="next"></span></button>
           <span class="timecode" id="current-time">00:00.000</span>
           <div class="seek-track" id="seek-track" role="slider" aria-label="Seek" data-i18n-aria-label="aria.seek" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div class="seek-fill" id="seek-fill"></div></div>
           <span class="timecode" id="total-time">00:00.000</span>
@@ -52,6 +57,24 @@
       <div class="thumb-stats" id="thumb-stats">Visible: 0 · Requested: 0 · Loading: 0 · Loaded: 0 · Cache Hit: 0</div>
     </section>
     <aside class="inspector-panel" aria-label="Inspector" data-i18n-aria-label="aria.inspector">
+      <!-- Shown when no clip is open. There is no clip for colour controls to
+           act on at that point, so the panel reports on the library and the
+           batch instead of rendering a dead pipeline. -->
+      <section class="panel-block" id="library-block">
+        <h2 class="panel-block-title" data-i18n="library.title">Media Library</h2>
+        <dl class="stat-list" id="library-stats"></dl>
+        <div class="block-row">
+          <span class="block-label" data-i18n="settings.exportLocation">Export Location</span>
+          <span class="block-value" id="library-destination" title=""></span>
+        </div>
+        <div class="block-actions">
+          <button type="button" id="library-select-all" data-i18n="batchExport.selectAll">Select videos</button>
+          <button type="button" id="library-choose-destination" data-i18n="settings.chooseFolder">Choose Folder</button>
+        </div>
+        <button class="export-button" id="library-export-selected" type="button" disabled data-i18n="batchExport.exportSelected">Export selected</button>
+        <p class="block-hint" data-i18n="batchExport.selectHint">Tick clips in the list to export several at once.</p>
+      </section>
+      <section class="panel-block" id="clip-block">
       <div class="accordion">
         <section class="acc-item open" data-acc="color"><h3 class="acc-head"><span data-i18n="inspector.color">Color</span><svg class="chevron" viewBox="0 0 24 24" width="12" height="12"><path d="M6 9l6 6 6-6" fill="none" stroke="currentColor" stroke-width="2"/></svg></h3><div class="acc-body">
           <div class="acc-field"><label data-i18n="color.sourceLabel">Source Color</label><select id="color-profile"><option value="unknown" data-i18n="color.autoUnknown">Auto (unknown)</option><option value="normal" data-i18n="color.normal">Normal</option><option value="action4-dlogm" data-i18n="color.dlogm">D-Log M (Action 4)</option><option value="action5pro-dlogm" data-i18n="color.action5proDlogm">D-Log M (Action 5 Pro)</option><option value="action6-dlogm" data-i18n="color.action6Dlogm">D-Log M (Action 6)</option><option value="pocket3-dlogm" data-i18n="color.pocket3Dlogm">D-Log M (Pocket 3)</option><option value="pocket4-dlog" data-i18n="color.pocket4Dlog">D-Log (Pocket 4)</option><option value="pocket4p-dlog" data-i18n="color.pocket4pDlog">D-Log (Pocket 4 Pro)</option><option value="osmo-nano-dlogm" data-i18n="color.osmoNanoDlogm">D-Log M (Osmo Nano)</option></select><span class="color-detect-hint" id="color-detect-hint" hidden></span></div>
@@ -62,9 +85,14 @@
         <section class="acc-item" data-acc="watermark"><h3 class="acc-head"><span data-i18n="inspector.watermark">Watermark</span><svg class="chevron" viewBox="0 0 24 24" width="12" height="12"><path d="M6 9l6 6 6-6" fill="none" stroke="currentColor" stroke-width="2"/></svg></h3><div class="acc-body"><div class="acc-field"><label><input id="watermark-enable" type="checkbox"> <span data-i18n="wm.enable">Enable</span></label><label data-i18n="watermark.style">Style</label><select id="watermark" disabled><option value="none" data-i18n="watermark.none">None</option><option value="action4.official.oa4" data-i18n="watermark.official">Official OA4</option></select></div><p class="watermark-placement" data-i18n="wm.fixedBottomCenter">Fixed: bottom center</p><div class="acc-field"><label data-i18n="watermark.scale">Scale</label><input id="watermark-scale" type="range" min="0.05" max="0.5" step="0.005" value="0.195"></div><div class="acc-field"><label data-i18n="watermark.opacity">Opacity</label><input id="watermark-opacity" type="range" min="0" max="1" step="0.05" value="1"></div></div></section>
       </div>
       <div class="export-facts" id="export-facts"></div>
-      <button class="export-button" id="export-button" type="button" disabled><span data-i18n="export.button">Export</span></button><button class="export-button secondary" id="export-as-button" type="button" disabled data-i18n="export.as" hidden>Export As</button>
-      <div class="export-progress" id="export-progress" hidden><div class="export-progress-fill" id="export-progress-fill"></div></div><button class="export-button secondary export-cancel" id="export-cancel-button" type="button" hidden data-i18n="export.cancel">Cancel export</button>
-      <div id="export-status" class="export-status"></div>
+      </section>
+      <!-- Pinned to the bottom of the panel so the primary action stays
+           reachable without scrolling past the pipeline. -->
+      <div class="inspector-actions" id="clip-actions">
+        <button class="export-button" id="export-button" type="button" disabled><span data-i18n="export.button">Export</span></button><button class="export-button secondary" id="export-as-button" type="button" disabled data-i18n="export.as" hidden>Export As</button>
+        <div class="export-progress" id="export-progress" hidden><div class="export-progress-fill" id="export-progress-fill"></div></div><button class="export-button secondary export-cancel" id="export-cancel-button" type="button" hidden data-i18n="export.cancel">Cancel export</button>
+        <div id="export-status" class="export-status"></div>
+      </div>
       <p class="preview-debug" id="preview-debug">Mode: BROWSE | Source: - | Type: LRF_PROXY</p>
     </aside>
   </main>
@@ -89,7 +117,54 @@
       </div>
     </section>
   </div>
+  <div class="settings-overlay" id="batch-overlay" hidden>
+    <section class="settings-dialog batch-dialog" role="dialog" aria-modal="true" aria-labelledby="batch-modal-title">
+      <h2 id="batch-modal-title" data-i18n="batchExport.title">Batch export</h2>
+      <div id="batch-setup">
+        <div class="batch-summary">
+          <span id="batch-setup-headline" role="status" aria-live="polite"></span>
+          <span id="batch-setup-count" class="batch-count"></span>
+        </div>
+        <div class="batch-destination" id="batch-setup-destination" title=""></div>
+        <div class="batch-options">
+          <label class="batch-option">
+            <input type="checkbox" id="batch-option-restore" checked>
+            <span class="batch-option-body">
+              <span class="batch-option-name" data-i18n="batchExport.restore">Color restoration</span>
+              <span class="batch-option-hint" data-i18n="batchExport.restoreHint"></span>
+            </span>
+          </label>
+          <div class="batch-option">
+            <label class="batch-option-main">
+              <input type="checkbox" id="batch-option-watermark">
+              <span class="batch-option-name" data-i18n="batchExport.watermark">Add watermark</span>
+            </label>
+            <select id="batch-option-watermark-id" disabled></select>
+          </div>
+        </div>
+        <div class="batch-list" id="batch-setup-list" role="list"></div>
+        <div class="settings-actions">
+          <button id="batch-setup-cancel" type="button" data-i18n="export.cancel">Cancel</button>
+          <button id="batch-setup-start" class="primary" type="button" data-i18n="batchExport.start">Start export</button>
+        </div>
+      </div>
+      <div id="batch-progress" hidden>
+        <div class="batch-summary">
+          <span id="batch-modal-headline" role="status" aria-live="polite"></span>
+          <span id="batch-modal-count" class="batch-count"></span>
+        </div>
+        <div class="batch-destination" id="batch-modal-destination" title=""></div>
+        <div class="export-progress" id="batch-modal-progress"><div class="export-progress-fill" id="batch-modal-fill"></div></div>
+        <div class="batch-list" id="batch-modal-list" role="list"></div>
+        <div class="settings-actions">
+          <button id="batch-modal-reveal" type="button" data-i18n="batchExport.reveal" hidden>Show in Folder</button>
+          <button id="batch-modal-cancel" type="button" data-i18n="batchExport.cancelAll">Cancel all</button>
+          <button id="batch-modal-close" type="button" data-i18n="settings.close" hidden>Close</button>
+        </div>
+      </div>
+    </section>
+  </div>
   <div class="settings-overlay" id="local-sources-overlay" hidden><section class="settings-dialog source-dialog" aria-label="Local library sources" data-i18n-aria-label="local.manage"><h2 data-i18n="local.manage">Manage Sources</h2><p class="source-note" data-i18n="local.removeHint">Removing a source only removes it from this library. Files remain on disk.</p><div class="source-list" id="local-source-list"></div><div class="settings-actions"><button id="local-sources-close" type="button" data-i18n="settings.close">Close</button></div></section></div>
-  <script src="../i18n/en.js"></script><script src="../i18n/zh-CN.js"></script><script src="../i18n/index.js"></script><script src="./virtual-grid.js"></script><script src="./sort.js"></script><script src="./timeline-math.js"></script><script src="./timeline-edit-model.js"></script><script src="../thumbnail/thumb-scheduler.js"></script><script src="./preview-canvas-surface.js"></script><script src="./editor-ui-state.js"></script><script src="./export-modal-state.js"></script><script src="./preview-clock.js"></script><script src="./renderer-phase3.js"></script><script>document.addEventListener('DOMContentLoaded',()=>{const v=document.getElementById('preview-video');document.addEventListener('keydown',e=>{if(e.target.matches('input,select,textarea'))return;if(e.code==='Space'){e.preventDefault();document.getElementById('play-button').click()}if(e.key==='ArrowLeft')v.currentTime=Math.max(0,v.currentTime-.1);if(e.key==='ArrowRight')v.currentTime=Math.min(v.duration||0,v.currentTime+.1)})});</script>
+  <script src="../i18n/en.js"></script><script src="../i18n/zh-CN.js"></script><script src="../i18n/index.js"></script><script src="./virtual-grid.js"></script><script src="./sort.js"></script><script src="./timeline-math.js"></script><script src="./timeline-edit-model.js"></script><script src="../thumbnail/thumb-scheduler.js"></script><script src="./preview-canvas-surface.js"></script><script src="./editor-ui-state.js"></script><script src="./export-modal-state.js"></script><script src="./batch-export-state.js"></script><script src="./batch-export-options.js"></script><script src="./icons.js"></script><script src="../color/auto-restore.js"></script><script src="./preview-clock.js"></script><script src="./renderer-phase3.js"></script><script>document.addEventListener('DOMContentLoaded',()=>{const v=document.getElementById('preview-video');document.addEventListener('keydown',e=>{if(e.target.matches('input,select,textarea'))return;if(e.code==='Space'){e.preventDefault();document.getElementById('play-button').click()}if(e.key==='ArrowLeft')v.currentTime=Math.max(0,v.currentTime-.1);if(e.key==='ArrowRight')v.currentTime=Math.min(v.duration||0,v.currentTime+.1)})});</script>
 </body>
 </html>

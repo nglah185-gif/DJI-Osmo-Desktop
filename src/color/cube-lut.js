@@ -19,6 +19,9 @@ function parseCubeText(text, source = "UNKNOWN") {
   if (!Number.isInteger(size) || size < 2) throw new Error("CUBE missing valid LUT_3D_SIZE: " + source);
   if (values.length !== size ** 3) throw new Error("CUBE sample count mismatch: expected " + (size ** 3) + ", got " + values.length);
   if (![...domainMin, ...domainMax].every(Number.isFinite)) throw new Error("CUBE has invalid domain: " + source);
+  // An empty domain divides by zero in sampleCube, which turns every sample into
+  // NaN and then writes NaN bytes into the frame. Reject the file instead.
+  for (let channel = 0; channel < 3; channel++) if (!(domainMax[channel] > domainMin[channel])) throw new Error("CUBE has an empty domain on channel " + channel + ": " + source);
   return { format: "CUBE", title, size, domainMin, domainMax, values, comments, source };
 }
 function sampleCube(lut, rgb) {

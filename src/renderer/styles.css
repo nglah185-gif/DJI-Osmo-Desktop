@@ -1,284 +1,525 @@
-/* Design tokens */
+/* DJI Osmo Desktop — interface styling.
+
+   Design constraints that come from the subject, not from taste:
+
+   1. This is a colour tool. A UI with a colour cast biases how the operator
+      reads the grade, so every neutral here is a true neutral (equal or near-
+      equal RGB). The previous palette was blue-tinted (#101215 / #16191c /
+      #1d2125), which made the whole window cold and muddy.
+   2. The footage is the only saturated thing on screen. Chrome stays quiet and
+      the single accent is spent on selection and the primary action.
+   3. Technical readouts (timecode, resolution, frame rate, bitrate, codec) are
+      set in tabular figures so columns of numbers line up and can be compared
+      down a list. That is a working requirement, not a style choice.
+   4. The inspector's sections follow the real processing order of the filter
+      graph — source colour, then restoration, then look, then adjustments,
+      then the watermark overlay. The order is information, so it is shown. */
+
+/* ---- Tokens ---- */
 :root {
   color-scheme: dark;
-  --bg: #101215;
-  --surface: #16191c;
-  --surface-elevated: #1d2125;
-  --border: #262b30;
-  --border-strong: #333a41;
-  --text-primary: #e6eaec;
-  --text-secondary: #8b959c;
-  --accent: #1e6ff2;
-  --accent-hover: #2f7bff;
-  --success: #22c55e;
-  --warning: #f59e0b;
-  --error: #ef4444;
-  --focus: #1e6ff2;
-  --radius: 6px;
-  --space-1: 6px;
-  --space-2: 10px;
-  --space-3: 14px;
-  --space-4: 20px;
-  --control-height: 26px;
-  --font-ui: "Segoe UI", system-ui, sans-serif;
-  --font-mono: Consolas, "Cascadia Mono", monospace;
+
+  /* Neutral ramp. Four surfaces with real separation, so panels, cards and
+     controls read as different layers instead of one flat slab. */
+  --bg: #0b0c0e;
+  --surface: #131517;
+  --raise: #1a1d20;
+  --raise-hover: #212528;
+  --overlay: #1c2023;
+
+  --line: #24282c;
+  --line-strong: #333a40;
+
+  --text: #e9edf0;
+  --text-muted: #939ca3;
+  --text-faint: #6a737a;
+
+  /* Blue, reserved for "what you have chosen / what happens next". Brighter and
+     cleaner than the previous #1e6ff2, which was tuned against the old
+     blue-tinted background and read muddy on a true neutral. Nothing else in
+     the chrome is allowed to use it: the LRF chip is neutral and the colour-mode
+     chip is violet, so the accent stays the only blue in the interface. */
+  --accent: #3b7ff7;
+  --accent-hover: #5a94ff;
+  --accent-ink: #ffffff;
+  --accent-dim: rgba(59, 127, 247, .16);
+  --accent-line: rgba(59, 127, 247, .5);
+
+  --ok: #4bc97e;
+  --warn: #e8a33d;
+  --err: #ff7070;
+
+  --radius-sm: 4px;
+  --radius: 7px;
+  --radius-lg: 11px;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 22px;
+
+  --control-height: 28px;
+
+  /* Segoe UI Variable is the Windows 11 UI face and is a genuine step up from
+     plain Segoe UI at these sizes; the fallbacks keep the older ones usable. */
+  --font-ui: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "Cascadia Mono", "Cascadia Code", Consolas, monospace;
+
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, .45);
+  --shadow-2: 0 14px 40px rgba(0, 0, 0, .55);
 }
+
+/* ---- Icons ----
+   One size rule for the whole set. Icons paint with currentColor, so they
+   follow whatever state their container is in and never need their own colour.
+   Size is layout, so every icon is sized here rather than in the SVG markup. */
+[data-icon] { display: inline-flex; align-items: center; justify-content: center; }
+.icon { width: 16px; height: 16px; display: block; flex: 0 0 auto; }
+.icon-button .icon { width: 17px; height: 17px; }
+.scan-status .check .icon { width: 13px; height: 13px; }
+.source-switch .compact-action .icon { width: 15px; height: 15px; }
+.source-remove .icon { width: 14px; height: 14px; }
+.video-empty-icon .icon { width: 44px; height: 44px; stroke-width: 1.25; }
+
+/* Scrollbars. Chromium's default is a bright system-grey slab that reads as
+   chrome from a different application; inside the media list it also competes
+   with the thumbnails for attention. The thumb is inset with a transparent
+   border so it floats rather than filling the gutter. */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--line-strong); border: 2px solid transparent; background-clip: content-box; border-radius: 5px; }
+::-webkit-scrollbar-thumb:hover { background: var(--text-faint); background-clip: content-box; }
+::-webkit-scrollbar-corner { background: transparent; }
+
 * { box-sizing: border-box; }
 html, body { height: 100%; }
-body { margin: 0; min-width: 1024px; background: var(--bg); color: var(--text-primary); font-family: var(--font-ui); font-size: 12px; display: grid; grid-template-rows: 48px 1fr; overflow: hidden; }
+body { margin: 0; min-width: 1024px; background: var(--bg); color: var(--text); font-family: var(--font-ui); font-size: 12.5px; line-height: 1.45; display: grid; grid-template-rows: 52px 1fr; overflow: hidden; -webkit-font-smoothing: antialiased; }
 button, input, select { font: inherit; color: inherit; }
 button { cursor: pointer; }
-:focus-visible { outline: 1px solid var(--focus); outline-offset: 1px; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-radius: var(--radius-sm); }
 
-/* Header */
-.topbar { display: flex; align-items: center; gap: 18px; padding: 0 var(--space-4); background: var(--surface); border-bottom: 1px solid var(--border); }
-.brand { display: flex; align-items: center; gap: 9px; min-width: 220px; }
-.brand-mark { height: 28px; width: auto; display: block; }
-.brand-name { font-size: 14px; font-weight: 600; }
-.app-nav { display: flex; gap: 4px; margin-left: 8px; align-items: center; }
-.nav-title { color: var(--text-secondary); font-size: 12px; letter-spacing: .3px; }
-.nav-tab { height: 30px; padding: 0 15px; border: 1px solid transparent; border-radius: var(--radius); background: transparent; color: var(--text-secondary); font-size: 12px; }
-.nav-tab:hover { color: var(--text-primary); }
-.nav-tab.active { background: var(--surface-elevated); border-color: var(--border-strong); color: var(--text-primary); }
-.device-title { flex: 1; text-align: center; color: var(--text-primary); font-size: 13px; font-weight: 600; }
-.topbar-actions { display: flex; align-items: center; gap: 10px; }
+/* Numeric readouts share one treatment so digits align wherever they appear. */
+.timecode, .card-meta, .export-modal-pct, .batch-count, .timeline-meta, .timeline-zoom-value { font-variant-numeric: tabular-nums; }
+
+/* ---- Header ---- */
+.topbar { display: flex; align-items: center; gap: var(--space-4); padding: 0 var(--space-4); background: var(--surface); border-bottom: 1px solid var(--line); }
+.brand { display: flex; align-items: center; gap: 10px; min-width: 200px; }
+.brand-mark { height: 24px; width: auto; display: block; }
+.brand-name { font-size: 13.5px; font-weight: 600; letter-spacing: .1px; }
+.app-nav { display: flex; gap: var(--space-1); align-items: center; }
+.nav-title { color: var(--text-muted); font-size: 12px; }
+.nav-tab { height: 30px; padding: 0 14px; border: 1px solid transparent; border-radius: var(--radius); background: transparent; color: var(--text-muted); font-size: 12px; }
+.nav-tab:hover { color: var(--text); }
+.nav-tab.active { background: var(--raise); border-color: var(--line-strong); color: var(--text); }
+.device-title { flex: 1; text-align: center; color: var(--text); font-size: 12.5px; font-weight: 600; }
+.topbar-actions { display: flex; align-items: center; gap: var(--space-2); }
 .language-picker { display: inline-flex; align-items: center; gap: 6px; }
-.globe { font-size: 12px; }
-.language-picker select { height: var(--control-height); background: var(--surface-elevated); color: var(--text-primary); border: 1px solid var(--border-strong); border-radius: var(--radius); padding: 0 8px; font-size: 11px; }
-.icon-button { width: 30px; height: 30px; display: grid; place-items: center; padding: 0; border: 1px solid var(--border-strong); border-radius: var(--radius); color: var(--text-secondary); background: var(--surface-elevated); }
-.icon-button:hover { color: var(--text-primary); border-color: var(--accent); }
+.globe { font-size: 12px; color: var(--text-muted); }
+.language-picker select { height: var(--control-height); background: var(--raise); color: var(--text); border: 1px solid var(--line-strong); border-radius: var(--radius); padding: 0 8px; font-size: 12px; }
+.icon-button { width: 30px; height: 30px; display: grid; place-items: center; padding: 0; border: 1px solid var(--line-strong); border-radius: var(--radius); color: var(--text-muted); background: var(--raise); }
+.icon-button:hover { color: var(--text); border-color: var(--accent-line); }
 .icon-button:disabled { opacity: .35; pointer-events: none; }
 .settings { border: none; background: transparent; }
 
-/* Workspace */
-.workspace { display: grid; grid-template-columns: 320px minmax(360px, 1fr) 300px; min-height: 0; overflow: hidden; }
+/* ---- Workspace ---- */
+.workspace { display: grid; grid-template-columns: 344px minmax(360px, 1fr) 312px; min-height: 0; overflow: hidden; }
 
-/* Library */
-.library-panel { display: flex; flex-direction: column; min-height: 0; border-right: 1px solid var(--border); background: var(--surface); }
-.panel-heading { padding: 12px var(--space-3) 8px; }
-.panel-heading h1 { margin: 0; font-size: 15px; font-weight: 600; }
-.scan-row { display: flex; align-items: center; gap: 9px; padding: 0 var(--space-3) 10px; border-bottom: 1px solid var(--border); }
-.scan-status { display: inline-flex; align-items: center; gap: 5px; color: var(--success); font-size: 11px; }
-.scan-status .check { color: var(--success); }
-.scan-files { color: var(--text-secondary); font-size: 11px; }
-.rescan-button { margin-left: auto; height: 24px; padding: 0 10px; border: 1px solid var(--border-strong); border-radius: var(--radius); background: var(--surface-elevated); color: var(--text-primary); font-size: 11px; }
-.rescan-button:hover { border-color: var(--accent); }
-.library-filter { display: flex; flex-wrap: wrap; gap: 4px; padding: 8px var(--space-3); border-bottom: 1px solid var(--border); }
-.filter-tab { height: 24px; padding: 0 9px; border: 1px solid transparent; border-radius: var(--radius); background: transparent; color: var(--text-secondary); font-size: 11px; white-space: nowrap; flex: 0 0 auto; }
-.filter-tab:hover { color: var(--text-primary); }
-.filter-tab.active { background: var(--surface-elevated); border-color: var(--border-strong); color: var(--text-primary); }
-.filter-count { color: var(--text-secondary); margin-left: 3px; font-family: var(--font-mono); font-size: 10px; }
-.sort-select { margin-left: auto; display: inline-flex; align-items: center; gap: 5px; color: var(--text-secondary); font-size: 10px; }
-.sort-select select { height: 24px; max-width: 150px; background: var(--surface-elevated); color: var(--text-primary); border: 1px solid var(--border-strong); border-radius: var(--radius); padding: 0 6px; font-size: 10px; }
-.source-switch { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; padding: 8px var(--space-3); border-bottom: 1px solid var(--border); color: var(--text-secondary); font-size: 10px; }
-.source-switch button { height: 24px; padding: 0 9px; border: 1px solid transparent; border-radius: var(--radius); background: transparent; color: var(--text-secondary); font-size: 11px; white-space: nowrap; flex: 0 0 auto; }
-.source-switch button.active { background: var(--surface-elevated); border-color: var(--border-strong); color: var(--text-primary); }
-.local-actions { margin-left: auto; display: flex; align-items: center; gap: 4px; }
+/* ---- Library ---- */
+.library-panel { position: relative; display: flex; flex-direction: column; min-height: 0; border-right: 1px solid var(--line); background: var(--surface); }
+.panel-heading { padding: var(--space-3) var(--space-3) var(--space-2); }
+.panel-heading h1 { margin: 0; font-size: 14px; font-weight: 600; letter-spacing: .1px; }
+
+.scan-row { display: flex; align-items: center; gap: var(--space-2); padding: 0 var(--space-3) var(--space-3); }
+.scan-status { display: inline-flex; align-items: center; gap: 5px; color: var(--ok); font-size: 11.5px; }
+.scan-status .check { color: var(--ok); }
+.scan-files { color: var(--text-muted); font-size: 11.5px; font-variant-numeric: tabular-nums; }
+.rescan-button { margin-left: auto; height: 24px; padding: 0 10px; border: 1px solid var(--line-strong); border-radius: var(--radius); background: var(--raise); color: var(--text-muted); font-size: 11.5px; }
+.rescan-button:hover { color: var(--text); border-color: var(--accent-line); }
+
+/* Filter and source rows are two kinds of the same control, so they share a
+   rule. Kept as separate class names because the markup labels them apart.
+   Wrapping matters here: the three filter pills plus the sort control measure
+   wider than the 344px panel, so without it the sort select overflowed the
+   panel's right edge by about 12px. */
+.library-filter { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-1); row-gap: 6px; padding: var(--space-2) var(--space-3); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.filter-tab { height: 26px; padding: 0 10px; border: 1px solid transparent; border-radius: var(--radius); background: transparent; color: var(--text-muted); font-size: 11.5px; white-space: nowrap; flex: 0 0 auto; }
+.filter-tab:hover { color: var(--text); }
+.filter-tab.active { background: var(--raise); border-color: var(--line-strong); color: var(--text); }
+.filter-count { margin-left: 4px; color: var(--text-faint); font-size: 10.5px; font-variant-numeric: tabular-nums; }
+/* The sort control is the only thing on this row allowed to take the slack, and
+   its label must not wrap: at 344px the label broke into two stacked characters
+   once the filter pills grew. */
+.sort-select { margin-left: auto; display: inline-flex; align-items: center; gap: 5px; color: var(--text-faint); font-size: 10.5px; white-space: nowrap; flex: 0 0 auto; }
+.sort-select select { height: 26px; max-width: 140px; background: var(--raise); color: var(--text); border: 1px solid var(--line-strong); border-radius: var(--radius); padding: 0 6px; font-size: 11px; }
+
+/* ---- View toggle ----
+   List trades thumbnail size for metadata density: it is the view for checking
+   durations, codecs and frame rates down a card. Poster trades metadata for
+   picture: it is the view for finding the clip you want. Both render from the
+   same card markup, so a card never has to be rebuilt to switch. */
+.view-toggle { display: inline-flex; gap: 2px; padding: 2px; background: var(--raise); border: 1px solid var(--line); border-radius: var(--radius); flex: 0 0 auto; }
+.view-toggle button { width: 26px; height: 22px; padding: 0; display: grid; place-items: center; border: 1px solid transparent; border-radius: var(--radius-sm); background: transparent; color: var(--text-faint); }
+.view-toggle button:hover { color: var(--text); }
+.view-toggle button.active { background: var(--raise-hover); border-color: var(--line-strong); color: var(--accent); }
+.view-toggle .icon { width: 15px; height: 15px; }
+
+.source-switch { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1); padding: var(--space-2) var(--space-3); border-bottom: 1px solid var(--line); color: var(--text-faint); font-size: 10.5px; }
+.source-switch button { height: 26px; padding: 0 10px; border: 1px solid transparent; border-radius: var(--radius); background: transparent; color: var(--text-muted); font-size: 11.5px; white-space: nowrap; flex: 0 0 auto; }
+.source-switch button:hover { color: var(--text); }
+.source-switch button.active { background: var(--raise); border-color: var(--line-strong); color: var(--text); }
+.local-actions { margin-left: auto; display: flex; align-items: center; gap: var(--space-1); }
 .local-actions[hidden] { display: none !important; }
-.source-switch .local-actions button { border-color: var(--border-strong); background: var(--surface-elevated); }
-.source-switch .local-actions .compact-action { width: 24px; padding: 0; font-size: 15px; }
-.export-button.secondary { margin-top: 6px; border: 1px solid var(--border-strong); background: var(--surface-elevated); color: var(--text-primary); }
-.settings-overlay { position: fixed; inset: 0; background: rgba(0, 0, 0, .5); display: grid; place-items: center; z-index: 50; }
-.settings-overlay[hidden] { display: none !important; }
-.settings-dialog { width: 420px; background: var(--surface); border: 1px solid var(--border-strong); border-radius: var(--radius); padding: var(--space-4); }
-.settings-dialog h2 { margin: 0 0 var(--space-3); font-size: 15px; }
-.settings-row { margin-bottom: var(--space-3); }
-.settings-row label { display: block; color: var(--text-secondary); font-size: 11px; margin-bottom: 5px; }
-.settings-row select, .settings-loc input { width: 100%; height: var(--control-height); background: var(--surface-elevated); color: var(--text-primary); border: 1px solid var(--border-strong); border-radius: var(--radius); padding: 0 8px; font-size: 11px; }
-.settings-loc { display: flex; gap: 8px; }
-.settings-loc input { flex: 1; }
-.settings-loc button { height: var(--control-height); border: 1px solid var(--border-strong); border-radius: var(--radius); background: var(--surface-elevated); padding: 0 10px; font-size: 11px; }
-.settings-actions { text-align: right; }
-.settings-actions button { height: var(--control-height); border: 1px solid var(--accent); border-radius: var(--radius); background: var(--accent-soft); color: var(--text-primary); padding: 0 14px; font-size: 11px; }
-.source-dialog { width: min(620px, calc(100vw - 40px)); max-height: min(620px, calc(100vh - 40px)); display: flex; flex-direction: column; }
-.source-note { margin: -4px 0 12px; color: var(--text-secondary); font-size: 11px; }
-.source-list { min-height: 72px; max-height: 420px; overflow: auto; margin-bottom: var(--space-3); border-top: 1px solid var(--border); }
-.source-row { display: grid; grid-template-columns: 22px minmax(0, 1fr) 28px; align-items: center; gap: 8px; min-height: 42px; border-bottom: 1px solid var(--border); }
-.source-kind { color: var(--text-secondary); text-align: center; font-size: 14px; }
-.source-path { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono); font-size: 10px; }
-.source-remove { width: 24px; height: 24px; padding: 0; border: 1px solid var(--border-strong); border-radius: var(--radius); background: transparent; color: var(--text-secondary); font-size: 16px; }
-.source-remove:hover { color: var(--error); border-color: var(--error); }
-.source-empty { padding: 24px 8px; color: var(--text-secondary); text-align: center; font-size: 11px; }
+.source-switch .local-actions button { border-color: var(--line-strong); background: var(--raise); color: var(--text-muted); }
+.source-switch .local-actions button:hover { color: var(--text); border-color: var(--accent-line); }
+.source-switch .local-actions .compact-action { width: 26px; padding: 0; font-size: 14px; }
+
 .media-list { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; position: relative; }
-.scan-loading { position: absolute; inset: 0; z-index: 5; display: grid; place-content: center; gap: 10px; text-align: center; background: rgba(16, 20, 24, .72); backdrop-filter: blur(2px); }
+.scan-loading { position: absolute; inset: 0; z-index: 5; display: grid; place-content: center; gap: var(--space-2); text-align: center; background: rgba(11, 12, 14, .78); backdrop-filter: blur(3px); }
 .scan-loading[hidden] { display: none !important; }
-.scan-loading-icon { font-size: 22px; color: var(--accent); animation: dji-spin 1.2s linear infinite; }
-.scan-loading p { margin: 0; font-size: 11px; color: var(--text-secondary); }
+.scan-loading-icon { font-size: 20px; color: var(--accent); animation: dji-spin 1.2s linear infinite; }
+.scan-loading p { margin: 0; font-size: 11.5px; color: var(--text-muted); }
 .scan-loading .progress-track { width: 200px; margin: 2px auto 0; }
 .grid-spacer { position: relative; width: 1px; }
-.media-card { position: absolute; display: flex; gap: 9px; width: 292px; height: 78px; left: 10px; padding: 7px; border: 1px solid var(--border); border-radius: var(--radius); color: inherit; background: var(--surface-elevated); text-align: left; cursor: pointer; overflow: hidden; transition: border-color .12s ease, background .12s ease; }
-.media-card:hover { border-color: var(--border-strong); }
-.media-card.selected { border-color: var(--accent); background: #18243a; }
-.thumb { position: relative; flex: 0 0 104px; height: 62px; display: grid; place-items: center; overflow: hidden; border-radius: 4px; background: #0c1013; }
+
+/* Cards. Geometry here is mirrored by ITEM_H/LEFT in renderer-phase3.js — the
+   grid positions cards arithmetically and never measures them. */
+.media-card { position: absolute; display: flex; gap: var(--space-3); width: 320px; height: 88px; left: 12px; padding: var(--space-2); border: 1px solid var(--line); border-radius: var(--radius); color: inherit; background: var(--raise); text-align: left; cursor: pointer; overflow: hidden; transition: border-color .12s ease, background .12s ease; }
+.media-card:hover { border-color: var(--line-strong); background: var(--raise-hover); }
+.media-card.selected { border-color: var(--accent); background: var(--accent-dim); }
+.media-card.picked { border-color: var(--accent-line); }
+.media-card.picked.selected { border-color: var(--accent); }
+
+.thumb { position: relative; flex: 0 0 116px; height: 72px; display: grid; place-items: center; overflow: hidden; border-radius: var(--radius-sm); background: #000; }
 .thumb img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: block; max-height: 100%; max-width: 100%; }
 .thumb img.landscape { object-fit: cover; }
 .thumb img.portrait { object-fit: cover; }
-.thumb-placeholder { color: #5d6870; font-size: 8px; letter-spacing: .4px; }
-.card-main { min-width: 0; display: flex; flex-direction: column; }
-.card-name { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; font-weight: 600; color: var(--text-primary); }
-.card-meta { display: flex; gap: 8px; color: var(--text-secondary); font-size: 10px; margin-top: 3px; font-family: var(--font-mono); }
-.card-badges { display: flex; gap: 4px; margin-top: 6px; flex-wrap: wrap; }
-.badge { color: var(--text-secondary); border: 1px solid var(--border-strong); background: #20262b; border-radius: 3px; padding: 1px 5px; font-size: 8px; letter-spacing: .3px; }
-.badge.proxy { color: #7db2ff; border-color: #2c4a77; background: #16233a; }
-.badge.slow { color: #f0b65c; border-color: #7a5427; background: #2a2213; }
-.badge.dlog { color: #b58cff; border-color: #6a4d9e; background: #241b3a; }
-.color-detect-hint { display: block; color: var(--text-secondary); font-size: 10px; margin-top: 2px; }
-.badge.muted { opacity: .7; }
+.thumb-placeholder { color: var(--text-faint); font-size: 9px; letter-spacing: .4px; }
 
-/* Preview */
-.preview-panel { display: flex; flex-direction: column; min-height: 0; padding: 0; background: #0c0e10; }
+.card-main { min-width: 0; flex: 1 1 auto; display: flex; flex-direction: column; justify-content: center; gap: 5px; }
+.card-name { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 600; color: var(--text); letter-spacing: .1px; }
+/* Three cells rather than one joined string, so duration / resolution / frame
+   rate form columns the eye can compare down the list. */
+.card-meta { display: flex; align-items: baseline; gap: 10px; color: var(--text-muted); font-size: 10.5px; font-family: var(--font-mono); }
+.card-meta-cell { flex: 0 0 auto; }
+.card-res { color: var(--text-faint); }
+.card-fps::after { content: "fps"; margin-left: 2px; color: var(--text-faint); font-size: 9px; }
+.card-kind { color: var(--text-faint); }
+.card-badges { display: flex; gap: var(--space-1); flex-wrap: wrap; }
+
+/* Poster layout. Same DOM, different emphasis: the picture leads and the
+   metadata follows, which is how a gallery is normally read. Geometry here is
+   mirrored by the poster entry in VIEWS in renderer-phase3.js. */
+body.view-poster .media-card { flex-direction: column; gap: 6px; width: 248px; height: 204px; padding: 8px; }
+/* contain rather than cover: this camera shoots both landscape and portrait, and
+   a cover crop turns a portrait frame into a horizontal slice of itself, which
+   defeats the point of browsing by picture. */
+body.view-poster .thumb { flex: 0 0 130px; width: 100%; height: 130px; }
+body.view-poster .thumb img { object-fit: contain; }
+body.view-poster .card-main { gap: 3px; justify-content: flex-start; }
+body.view-poster .card-meta { gap: 8px; }
+body.view-poster .card-name { font-size: 11.5px; }
+/* Chips are quiet by default. Only the colour mode is allowed to speak, because
+   it is the only one that asks the user to do something. */
+.badge { color: var(--text-muted); border: 1px solid var(--line); background: rgba(255, 255, 255, .03); border-radius: 3px; padding: 1px 6px; font-size: 9.5px; letter-spacing: .2px; }
+.badge.proxy, .badge.slow { color: var(--text-faint); }
+.badge.muted { opacity: .65; }
+/* Violet, not the accent: the colour-mode chip has to stay readable next to a
+   selected card, whose border is the accent blue. Two blues of different weight
+   in the same card read as one muddled state. */
+.badge.dlog { color: #b49bff; border-color: rgba(180, 155, 255, .45); background: rgba(180, 155, 255, .13); }
+.color-detect-hint { display: block; color: var(--text-muted); font-size: 10.5px; margin-top: 2px; }
+
+/* Selection checkbox. Sits on the thumbnail; the card body stays clickable. */
+.card-select { position: absolute; top: var(--space-2); left: var(--space-2); z-index: 2; width: 18px; height: 18px; padding: 0; border-radius: var(--radius-sm); border: 1px solid rgba(255, 255, 255, .5); background: rgba(0, 0, 0, .55); color: transparent; font-size: 11px; line-height: 1; cursor: pointer; display: grid; place-items: center; backdrop-filter: blur(2px); transition: background .12s ease, border-color .12s ease, color .12s ease; }
+.card-select::after { content: "\2713"; }
+.card-select:hover { border-color: rgba(255, 255, 255, .85); }
+.card-select[aria-checked="true"] { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 700; }
+.card-select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* Selection bar. Floats over the list: the grid-spacer height is computed from
+   ITEM_H, so a sibling that changed the scroll viewport would desync it. */
+.selection-bar { position: absolute; left: var(--space-3); right: var(--space-3); bottom: var(--space-3); z-index: 4; display: flex; align-items: center; gap: var(--space-2); padding: var(--space-2) var(--space-3); background: var(--overlay); border: 1px solid var(--line-strong); border-radius: var(--radius); box-shadow: var(--shadow-2); }
+.selection-bar[hidden] { display: none !important; }
+.selection-count { flex: 1 1 auto; font-size: 11.5px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.selection-bar button { height: var(--control-height); padding: 0 12px; font-size: 11.5px; background: var(--raise); color: var(--text); border: 1px solid var(--line-strong); border-radius: var(--radius); cursor: pointer; }
+.selection-bar button:hover { border-color: var(--accent-line); }
+.selection-bar button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
+.selection-bar button.primary:hover { background: var(--accent-hover); }
+.selection-bar button:disabled { opacity: .5; cursor: default; }
+
+/* ---- Preview ---- */
+.preview-panel { display: flex; flex-direction: column; min-height: 0; padding: 0; background: var(--bg); }
 .video-shell { position: relative; flex: 1; min-height: 0; display: grid; place-items: center; overflow: hidden; }
-/* Media elements inside the shell must never be able to inflate it: as grid items,
-   video/img get an automatic minimum size derived from their intrinsic aspect
-   ratio, so a portrait clip (e.g. DJI vertical footage 2160x3840, rotation -90)
-   grew the video element to ~1433px inside a 737px shell and overflow:hidden
-   cropped the picture. Absolute fill pins the box to the shell and
-   object-fit: contain letterboxes any aspect ratio (same pattern as .thumb img). */
+/* Media elements must never be able to inflate the shell: as grid items they
+   get an automatic minimum size from their intrinsic aspect ratio, so a
+   portrait clip (DJI vertical footage, rotation -90) grew the element to
+   ~1433px inside a 737px shell and overflow:hidden cropped the picture.
+   Absolute fill pins the box and object-fit letterboxes any aspect ratio. */
 .video-shell video, .video-shell img, .video-shell canvas { position: absolute; inset: 0; width: 100%; height: 100%; max-width: 100%; max-height: 100%; object-fit: contain; display: block; }
-.video-shell canvas { background: #0c0e10; }
+.video-shell canvas { background: var(--bg); }
 /* The UA stylesheet's [hidden] { display:none } is a normal rule and loses to
-   the author display:block above, which would leave #poster-preview (and the
-   video in edit mode) painted on top of the current layer. Restore hiding for
-   the media elements toggled through element.hidden (poster on canplay, video
-   vs. the edit frame); applies to the [hidden] attribute selector. */
+   the author display:block above, which would leave the poster (and the video
+   in edit mode) painted over the current layer. */
 .video-shell video[hidden], .video-shell img[hidden], .video-shell canvas[hidden] { display: none !important; }
-/* Unified zoom layer: wraps the video, poster and live-effect frame. Wheel zoom
-   translates into a scale() on this single box so whatever surface is currently
-   visible (browse video / poster / edit frame) zooms as one. */
 .shell-content { position: absolute; inset: 0; }
-/* Zoom factor badge: reuses the .preview-state look (10px, dark transparent
-   panel), pinned top-right of the shell and OUTSIDE .shell-content so it never
-   scales with the zoomed picture; hidden at 1x. */
-.zoom-badge { position: absolute; top: 10px; right: 10px; z-index: 10; pointer-events: none; font-family: var(--font-mono); }
-.video-empty { color: var(--text-secondary); text-align: center; }
-.video-empty span { display: block; color: var(--accent); font-size: 22px; margin-bottom: 8px; }
+.zoom-badge { position: absolute; top: var(--space-3); right: var(--space-3); z-index: 10; pointer-events: none; font-family: var(--font-mono); }
+.video-empty { color: var(--text-muted); text-align: center; }
+.video-empty span { display: block; color: var(--accent); font-size: 22px; margin-bottom: var(--space-2); }
 .video-empty span.spinning { animation: dji-spin 1s linear infinite; font-size: 18px; }
 @keyframes dji-spin { to { transform: rotate(360deg); } }
-.video-empty p { margin: 0; font-size: 11px; }
-.progress-track { width: 220px; height: 5px; margin: 14px auto 6px; background: var(--border-strong); border-radius: 3px; overflow: hidden; }
-.progress-fill { width: 0; height: 100%; background: var(--accent); border-radius: 3px; transition: width .3s ease; }
-.progress-label { position: static; display: block; margin-top: 2px; color: var(--text-secondary); font-family: var(--font-mono); font-size: 10px; }
-.inner-player { background: var(--surface); border-top: 1px solid var(--border); }
+.video-empty p { margin: 0; font-size: 11.5px; }
+
+.progress-track { width: 220px; height: 4px; margin: var(--space-3) auto 6px; background: var(--line-strong); border-radius: 2px; overflow: hidden; }
+.progress-fill { width: 0; height: 100%; background: var(--accent); border-radius: 2px; transition: width .3s ease; }
+.progress-label { position: static; display: block; margin-top: 2px; color: var(--text-muted); font-family: var(--font-mono); font-size: 10.5px; }
+
+.inner-player { background: var(--surface); border-top: 1px solid var(--line); }
 .photo-mode .video-only { display: none !important; }
 .photo-mode .acc-field:has(> #speed) { display: none; }
 .photo-mode .player-controls { display: none; }
-.player-controls { display: flex; align-items: center; gap: 8px; padding: 8px var(--space-3) 4px; }
-.play-button { width: 32px; height: 32px; color: var(--text-primary); }
+.player-controls { display: flex; align-items: center; gap: var(--space-2); padding: var(--space-3) var(--space-3) var(--space-1); }
+.play-button { width: 34px; height: 34px; color: var(--text); }
 .play-button svg { display: block; }
-.timecode { width: 70px; color: var(--text-primary); font-family: var(--font-mono); font-size: 11px; }
+.timecode { width: 76px; color: var(--text); font-family: var(--font-mono); font-size: 11.5px; }
 .timecode:last-of-type { text-align: right; }
-.seek-track { position: relative; flex: 1; height: 18px; display: flex; align-items: center; cursor: pointer; }
-.seek-track::before { content: ""; position: absolute; left: 0; right: 0; height: 3px; background: var(--border-strong); border-radius: 2px; }
+.seek-track { position: relative; flex: 1; height: 20px; display: flex; align-items: center; cursor: pointer; }
+.seek-track::before { content: ""; position: absolute; left: 0; right: 0; height: 3px; background: var(--line-strong); border-radius: 2px; }
 .seek-fill { position: absolute; left: 0; height: 3px; background: var(--accent); border-radius: 2px; width: 0; }
-.preview-footer { display: flex; align-items: center; gap: 10px; padding: 4px var(--space-3) 10px; }
-.mode-toggle { display: flex; gap: 3px; }
-.mode-button { height: 24px; padding: 0 12px; border: 1px solid var(--border-strong); border-radius: var(--radius); background: var(--surface-elevated); color: var(--text-secondary); font-size: 11px; }
-.mode-button:hover { color: var(--text-primary); }
-.mode-button.active { border-color: var(--accent); color: var(--text-primary); background: #16233a; }
-.preview-state { font-size: 10px; padding: 2px 8px; border-radius: 3px; border: 1px solid var(--border-strong); color: var(--text-secondary); background: var(--surface-elevated); }
-.preview-state.live { color: #7dffa8; border-color: #2c7a4c; background: #10271b; }
-.proxy-label { color: var(--text-secondary); font-size: 11px; margin-left: auto; }
-.fit-select { height: 24px; background: var(--surface-elevated); color: var(--text-primary); border: 1px solid var(--border-strong); border-radius: var(--radius); padding: 0 8px; font-size: 11px; }
-.error-banner { color: var(--error); background: rgba(239, 68, 68, .08); border-top: 1px solid rgba(239, 68, 68, .35); padding: 8px var(--space-3); font-size: 11px; }
-.timeline-dock { flex: 0 0 auto; padding: 10px var(--space-3) 12px; background: var(--surface); border-top: 1px solid var(--border); }
-.timeline-dock-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 7px; color: var(--text-secondary); font-size: 11px; }
-.timeline-dock-title { color: var(--text-primary); font-weight: 600; }
-.timeline-dock .timeline-meta { display: inline-flex; gap: 5px; margin: 0; }
-.timeline-range { display: flex; gap: 12px; margin-top: 8px; }
-.timeline-range label { display: inline-flex; align-items: center; gap: 5px; color: var(--text-secondary); font-size: 11px; }
-.timeline-range input { width: 88px; height: 24px; padding: 0 6px; border: 1px solid var(--border-strong); border-radius: var(--radius); background: var(--surface-elevated); }
-.timeline-dock .mini-timeline { margin: 0; }
-.timeline-toolbar { display:flex; align-items:center; gap:5px; margin:0 0 6px; }
-.timeline-toolbar button { height:24px; min-width:26px; padding:0 8px; border:1px solid var(--border-strong); border-radius:4px; background:var(--surface-elevated); color:var(--text-secondary); font-size:11px; cursor:pointer; }
-.timeline-toolbar button:hover { color:var(--text-primary); border-color:var(--accent); }
-.timeline-toolbar-spacer { flex:1; }
-.timeline-zoom-value { min-width:42px; text-align:center; color:var(--text-secondary); font:10px var(--font-mono); }
-.timeline-ruler { position:relative; height:16px; overflow:hidden; color:var(--text-secondary); font:9px var(--font-mono); }
-.timeline-ruler span { position:absolute; top:1px; transform:translateX(-50%); white-space:nowrap; }
-.timeline-dock .timeline-track { height: 42px; border-radius: 4px; cursor: crosshair; touch-action: none; }
-.timeline-dock .timeline-track.dragging { cursor: grabbing; background: #151d27; }
-.timeline-thumbnails { position: absolute; inset: 1px; border-radius: 3px; background-color: #1b2025; background-repeat: repeat-x; background-position: center; background-size: 120px 100%; opacity: .72; pointer-events: none; }
-.timeline-dock .timeline-clip { top: 4px; bottom: 4px; }
-.timeline-zoom-content { position:relative; height:100%; min-width:100%; }
-.timeline-dock .timeline-track { overflow-x:auto; overflow-y:hidden; }
-.timeline-dock .timeline-track::after { display:none; }
-.timeline-trim-dim { position:absolute; top:1px; bottom:1px; background:rgba(0,0,0,.62); pointer-events:none; z-index:1; }
-.timeline-trim-dim-left { left:1px; }
-.timeline-trim-dim-right { right:1px; }
-.timeline-segments { position:absolute; inset:1px; min-width:100%; overflow:visible; }
-.timeline-segment { position:absolute; top:4px; bottom:4px; min-width:3px; display:flex; align-items:center; justify-content:center; background:#24579d; border:1px solid #5a9dff; border-radius:3px; cursor:grab; box-sizing:border-box; user-select:none; }
-.timeline-segment.selected { background:#2d73d5; border-color:#fff; box-shadow:0 0 0 1px rgba(255,255,255,.35); }
-.timeline-segment:active { cursor:grabbing; }
-.segment-label { color:#fff; font:9px var(--font-mono); pointer-events:none; opacity:.9; }
-.segment-handle { position:absolute; top:-1px; bottom:-1px; width:7px; background:#8fc2ff; cursor:ew-resize; }
-.segment-handle-in { left:-1px; border-radius:3px 0 0 3px; }
-.segment-handle-out { right:-1px; border-radius:0 3px 3px 0; }
-.timeline-dock .trim-handle { width: 12px; background: var(--accent); box-shadow: 0 0 0 2px rgba(30,111,242,.2); z-index: 2; }
-.timeline-dock .playhead { width: 2px; background: #fff; box-shadow: 0 0 0 1px rgba(0,0,0,.35); z-index: 3; pointer-events: none; }
-.timeline-trim-hint { color:var(--text-secondary); font-size:10px; }
+.preview-footer { display: flex; align-items: center; gap: var(--space-2); padding: var(--space-1) var(--space-3) var(--space-3); }
+.mode-toggle { display: flex; gap: 2px; padding: 2px; background: var(--raise); border: 1px solid var(--line); border-radius: var(--radius); }
+.mode-button { height: 24px; padding: 0 12px; border: 1px solid transparent; border-radius: var(--radius-sm); background: transparent; color: var(--text-muted); font-size: 11.5px; }
+.mode-button:hover { color: var(--text); }
+.mode-button.active { border-color: var(--line-strong); color: var(--text); background: var(--raise-hover); }
+.preview-state { font-size: 10.5px; padding: 3px 8px; border-radius: var(--radius-sm); border: 1px solid var(--line-strong); color: var(--text-muted); background: var(--raise); }
+.preview-state.live { color: var(--ok); border-color: rgba(75, 201, 126, .4); background: rgba(75, 201, 126, .1); }
+.proxy-label { color: var(--text-faint); font-size: 11px; margin-left: auto; }
+.fit-select { height: 26px; background: var(--raise); color: var(--text); border: 1px solid var(--line-strong); border-radius: var(--radius); padding: 0 8px; font-size: 11.5px; }
+.error-banner { display: flex; align-items: center; gap: var(--space-2); color: var(--err); background: rgba(255, 112, 112, .08); border-top: 1px solid rgba(255, 112, 112, .3); padding: var(--space-2) var(--space-3); font-size: 11.5px; }
+.error-banner[hidden] { display: none !important; }
+.error-banner button { margin-left: auto; height: 24px; padding: 0 10px; border: 1px solid rgba(255, 112, 112, .45); border-radius: var(--radius); background: transparent; color: var(--err); font-size: 11px; }
 
-/* Inspector */
-.inspector-panel { display: flex; flex-direction: column; min-height: 0; overflow-y: auto; border-left: 1px solid var(--border); background: var(--surface); padding: var(--space-3); }
-.accordion { display: flex; flex-direction: column; }
-.acc-item { border-bottom: 1px solid var(--border); }
-.acc-head { display: flex; align-items: center; justify-content: space-between; margin: 0; padding: 10px 2px; cursor: pointer; color: var(--text-primary); font-size: 13px; font-weight: 600; user-select: none; }
-.chevron { color: var(--text-secondary); transition: transform .18s ease; }
-.acc-item.open .chevron { transform: rotate(180deg); }
-.acc-body { display: none; padding: 2px 2px 12px; }
-.acc-item.open .acc-body { display: block; }
-.acc-field { margin-bottom: 10px; }
-.acc-field label { display: block; color: var(--text-secondary); font-size: 11px; margin-bottom: 4px; }
-.acc-field select, .acc-field input[type=number] { width: 100%; height: var(--control-height); background: var(--surface-elevated); color: var(--text-primary); border: 1px solid var(--border-strong); border-radius: var(--radius); padding: 0 8px; font-size: 11px; }
-.acc-field input[type=range] { width: 100%; accent-color: var(--accent); }
-.watermark-placement { margin: 0 0 10px; color: var(--text-secondary); font-size: 11px; }
-.acc-field.dual { display: flex; gap: 12px; }
-.acc-field.dual label { display: inline-flex; align-items: center; gap: 5px; margin: 0; }
-.acc-field.dual input[type=number] { width: 90px; }
-.mini-timeline { margin: 4px 0 6px; }
-.timeline-track { position: relative; height: 30px; background: #101416; border: 1px solid var(--border); border-radius: var(--radius); }
-.timeline-clip { position: absolute; top: 5px; bottom: 5px; left: 0; right: 0; background: rgba(30, 111, 242, .15); border: 1px solid var(--accent); border-radius: 3px; }
-.trim-handle { position: absolute; top: 0; bottom: 0; width: 7px; background: rgba(30, 111, 242, .5); cursor: ew-resize; }
+/* ---- Timeline ---- */
+.timeline-dock { flex: 0 0 auto; padding: var(--space-3); background: var(--surface); border-top: 1px solid var(--line); }
+.timeline-dock-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: var(--space-2); color: var(--text-muted); font-size: 11.5px; }
+.timeline-dock-title { color: var(--text); font-weight: 600; }
+.timeline-dock .timeline-meta { display: inline-flex; gap: 5px; margin: 0; }
+.timeline-range { display: flex; gap: var(--space-3); margin-top: var(--space-2); }
+.timeline-range label { display: inline-flex; align-items: center; gap: 5px; color: var(--text-muted); font-size: 11.5px; }
+.timeline-range input { width: 92px; height: 26px; padding: 0 6px; border: 1px solid var(--line-strong); border-radius: var(--radius); background: var(--raise); font-family: var(--font-mono); font-size: 11px; }
+.timeline-dock .mini-timeline { margin: 0; }
+.timeline-toolbar { display: flex; align-items: center; gap: 5px; margin: 0 0 6px; }
+.timeline-toolbar button { height: 24px; min-width: 26px; padding: 0 8px; border: 1px solid var(--line-strong); border-radius: var(--radius-sm); background: var(--raise); color: var(--text-muted); font-size: 11px; cursor: pointer; }
+.timeline-toolbar button:hover { color: var(--text); border-color: var(--accent-line); }
+.timeline-toolbar-spacer { flex: 1; }
+.timeline-zoom-value { min-width: 42px; text-align: center; color: var(--text-faint); font-family: var(--font-mono); font-size: 10px; }
+.timeline-ruler { position: relative; height: 16px; overflow: hidden; color: var(--text-faint); font-family: var(--font-mono); font-size: 9px; }
+.timeline-ruler span { position: absolute; top: 1px; transform: translateX(-50%); white-space: nowrap; }
+.timeline-dock .timeline-track { height: 44px; border-radius: var(--radius-sm); cursor: crosshair; touch-action: none; overflow-x: auto; overflow-y: hidden; }
+.timeline-dock .timeline-track.dragging { cursor: grabbing; background: #171a1d; }
+.timeline-dock .timeline-track::after { display: none; }
+.timeline-thumbnails { position: absolute; inset: 1px; border-radius: var(--radius-sm); background-color: #1a1e21; background-repeat: repeat-x; background-position: center; background-size: 120px 100%; opacity: .7; pointer-events: none; }
+.timeline-dock .timeline-clip { top: 4px; bottom: 4px; }
+.timeline-zoom-content { position: relative; height: 100%; min-width: 100%; }
+.timeline-trim-dim { position: absolute; top: 1px; bottom: 1px; background: rgba(0, 0, 0, .66); pointer-events: none; z-index: 1; }
+.timeline-trim-dim-left { left: 1px; }
+.timeline-trim-dim-right { right: 1px; }
+.timeline-segments { position: absolute; inset: 1px; min-width: 100%; overflow: visible; }
+.timeline-segment { position: absolute; top: 4px; bottom: 4px; min-width: 3px; display: flex; align-items: center; justify-content: center; background: #1b3255; border: 1px solid var(--accent-line); border-radius: var(--radius-sm); cursor: grab; box-sizing: border-box; user-select: none; }
+.timeline-segment.selected { background: #1d3a6b; border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent-line); }
+.timeline-segment:active { cursor: grabbing; }
+.segment-label { color: var(--text); font-family: var(--font-mono); font-size: 9px; pointer-events: none; opacity: .85; }
+.segment-handle { position: absolute; top: -1px; bottom: -1px; width: 7px; background: var(--accent); opacity: .8; cursor: ew-resize; }
+.segment-handle-in { left: -1px; border-radius: var(--radius-sm) 0 0 var(--radius-sm); }
+.segment-handle-out { right: -1px; border-radius: 0 var(--radius-sm) var(--radius-sm) 0; }
+.timeline-dock .trim-handle { width: 12px; background: var(--accent); box-shadow: 0 0 0 2px var(--accent-dim); z-index: 2; }
+.timeline-dock .playhead { width: 2px; background: var(--text); box-shadow: 0 0 0 1px rgba(0, 0, 0, .5); z-index: 3; pointer-events: none; }
+.timeline-trim-hint { color: var(--text-faint); font-size: 10.5px; }
+.mini-timeline { margin: var(--space-1) 0 6px; }
+.timeline-track { position: relative; height: 30px; background: #101315; border: 1px solid var(--line); border-radius: var(--radius-sm); }
+.timeline-clip { position: absolute; top: 5px; bottom: 5px; left: 0; right: 0; background: var(--accent-dim); border: 1px solid var(--accent-line); border-radius: 3px; }
+.trim-handle { position: absolute; top: 0; bottom: 0; width: 7px; background: var(--accent-line); cursor: ew-resize; }
 #trim-in-handle { left: 0; border-radius: 3px 0 0 3px; }
 #trim-out-handle { right: 0; border-radius: 0 3px 3px 0; }
-.playhead { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--text-primary); }
-.timeline-meta { display: flex; justify-content: space-between; font-family: var(--font-mono); font-size: 10px; color: var(--text-secondary); }
-.export-facts { margin: 12px 0 8px; }
-.export-facts div { display: flex; justify-content: space-between; padding: 4px 2px; color: var(--text-secondary); font-size: 11px; border-bottom: 1px solid var(--border); }
-.export-facts dd { margin: 0; color: var(--text-primary); font-family: var(--font-mono); }
-.export-button { width: 100%; height: 34px; border: none; border-radius: var(--radius); background: var(--accent); color: #fff; font-size: 13px; font-weight: 600; }
+.playhead { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--text); }
+.timeline-meta { display: flex; justify-content: space-between; font-family: var(--font-mono); font-size: 10px; color: var(--text-muted); }
+
+/* ---- Inspector ----
+   The layout is driven by whether a clip is open, because that is what actually
+   changes what the user can do:
+
+     no clip   the panel is about the library and the batch. Rendering the colour
+               pipeline here produced a column of dead controls for a clip that
+               was not open, alongside a timeline reading 00:00.000 and a row of
+               disabled transport buttons.
+     clip open the panel is about that clip: the numbered colour pipeline, with
+               the export action pinned to the bottom so it never scrolls away.
+
+   Only the content region scrolls; the action row stays put. */
+body:not(.has-clip) #clip-block,
+body:not(.has-clip) #clip-actions,
+body:not(.has-clip) .timeline-dock,
+body:not(.has-clip) .inner-player,
+body:not(.has-clip) .thumb-stats { display: none !important; }
+body.has-clip #library-block { display: none !important; }
+/* With no clip open there is nothing to preview, so the preview column was a
+   large empty box next to a one-column list. Browsing gives the library the
+   window instead; opening a clip brings the viewer back. */
+body:not(.has-clip) .workspace { grid-template-columns: minmax(0, 1fr) 312px; }
+body:not(.has-clip) .preview-panel { display: none; }
+
+.inspector-panel { display: flex; flex-direction: column; min-height: 0; overflow: hidden; border-left: 1px solid var(--line); background: var(--surface); padding: var(--space-3); }
+.panel-block { flex: 1 1 auto; min-height: 0; overflow-y: auto; margin: calc(var(--space-3) * -1); padding: var(--space-3); }
+.panel-block-title { margin: 0 0 var(--space-3); font-size: 14px; font-weight: 600; letter-spacing: .1px; }
+.inspector-actions { flex: 0 0 auto; padding-top: var(--space-3); border-top: 1px solid var(--line); }
+.inspector-actions:empty { display: none; }
+
+/* Library summary. A definition list because the content is genuinely
+   label/value pairs, which also gives the numbers a column to align in. */
+.stat-list { margin: 0 0 var(--space-4); display: grid; grid-template-columns: 1fr auto; gap: 6px var(--space-2); font-size: 11.5px; }
+.stat-list dt { color: var(--text-muted); }
+.stat-list dd { margin: 0; color: var(--text); font-family: var(--font-mono); font-size: 11px; }
+.block-row { display: flex; flex-direction: column; gap: 4px; margin-bottom: var(--space-3); }
+.block-label { color: var(--text-muted); font-size: 11px; }
+.block-value { color: var(--text); font-family: var(--font-mono); font-size: 10.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.block-actions { display: flex; flex-wrap: wrap; gap: var(--space-1); margin-bottom: var(--space-3); }
+.block-actions button { height: var(--control-height); padding: 0 11px; border: 1px solid var(--line-strong); border-radius: var(--radius); background: var(--raise); color: var(--text); font-size: 11.5px; }
+.block-actions button:hover { border-color: var(--accent-line); }
+.block-hint { margin: var(--space-2) 0 0; color: var(--text-faint); font-size: 10.5px; line-height: 1.5; }
+
+/* The sections are numbered because the underlying colour pipeline is a real
+   sequence: source profile, then technical restoration, then the creative look,
+   then adjustments, then the watermark overlay. Reading the order off the panel
+   is how the user knows which control to set first. */
+.accordion { display: flex; flex-direction: column; counter-reset: stage; }
+.acc-item { counter-increment: stage; border-bottom: 1px solid var(--line); }
+.acc-head { display: flex; align-items: center; gap: var(--space-2); margin: 0; padding: 11px 2px; cursor: pointer; color: var(--text); font-size: 12.5px; font-weight: 600; user-select: none; }
+.acc-head::before { content: counter(stage); flex: 0 0 auto; width: 18px; height: 18px; display: grid; place-items: center; border: 1px solid var(--line-strong); border-radius: 50%; color: var(--text-faint); font-family: var(--font-mono); font-size: 9.5px; font-weight: 400; }
+.acc-item.open .acc-head::before { color: var(--accent); border-color: var(--accent-line); }
+.acc-head span:first-of-type { flex: 1 1 auto; }
+.chevron { color: var(--text-faint); transition: transform .18s ease; }
+.acc-item.open .chevron { transform: rotate(180deg); }
+.acc-body { display: none; padding: 2px 2px var(--space-3); }
+.acc-item.open .acc-body { display: block; }
+.acc-field { margin-bottom: var(--space-3); }
+.acc-field label { display: block; color: var(--text-muted); font-size: 11px; margin-bottom: 5px; }
+.acc-field select, .acc-field input[type=number] { width: 100%; height: var(--control-height); background: var(--raise); color: var(--text); border: 1px solid var(--line-strong); border-radius: var(--radius); padding: 0 8px; font-size: 11.5px; }
+.acc-field select:hover, .acc-field input:hover { border-color: var(--accent-line); }
+.acc-field input[type=range] { width: 100%; height: 20px; accent-color: var(--accent); background: transparent; cursor: pointer; }
+.acc-field input[type=checkbox] { accent-color: var(--accent); width: 14px; height: 14px; }
+.watermark-placement { margin: 0 0 var(--space-3); color: var(--text-faint); font-size: 11px; }
+.acc-field.dual { display: flex; gap: var(--space-3); }
+.acc-field.dual label { display: inline-flex; align-items: center; gap: 6px; margin: 0; }
+.acc-field.dual input[type=number] { width: 90px; }
+
+/* ---- Export ---- */
+.export-facts { margin: var(--space-3) 0 var(--space-2); }
+.export-facts div { display: flex; justify-content: space-between; padding: 5px 2px; color: var(--text-muted); font-size: 11.5px; border-bottom: 1px solid var(--line); }
+.export-facts dd { margin: 0; color: var(--text); font-family: var(--font-mono); font-size: 11px; }
+.export-button { width: 100%; height: 36px; border: none; border-radius: var(--radius); background: var(--accent); color: var(--accent-ink); font-size: 13px; font-weight: 650; letter-spacing: .1px; }
 .export-button:hover { background: var(--accent-hover); }
-.export-button:disabled { opacity: .45; pointer-events: none; }
-.export-status { margin-top: 8px; font-size: 10px; color: var(--text-secondary); overflow-wrap: anywhere; }
-.export-progress { height: 4px; margin-top: 8px; overflow: hidden; border-radius: 2px; background: var(--border-strong); }
+.export-button:disabled { opacity: .4; pointer-events: none; }
+.export-button.secondary { margin-top: 6px; border: 1px solid var(--line-strong); background: var(--raise); color: var(--text); font-weight: 500; }
+.export-button.secondary:hover { border-color: var(--accent-line); background: var(--raise-hover); }
+.export-cancel { color: var(--err); }
+.export-status { margin-top: var(--space-2); font-size: 10.5px; color: var(--text-muted); overflow-wrap: anywhere; }
+.export-progress { height: 4px; margin-top: var(--space-2); overflow: hidden; border-radius: 2px; background: var(--line-strong); }
 .export-progress-fill { width: 0; height: 100%; border-radius: inherit; background: var(--accent); transition: width .2s linear; }
-/* Export dialog. Wider than the settings dialog to fit the 16:9 cover beside
-   the destination path without wrapping it. */
+/* ffmpeg reports no percentage while starting up or flushing; animate the bar
+   instead of leaving it frozen at a stale width. The fill is forced to full
+   width because the keyframes animate scaleX -- a zero-width fill would scale to
+   nothing and the sweep would be invisible. */
+.export-progress.indeterminate .export-progress-fill { width: 100% !important; animation: export-indeterminate 1.1s ease-in-out infinite; transition: none; transform-origin: left center; }
+.batch-row.indeterminate .batch-row-fill { width: 100% !important; animation: export-indeterminate 1.1s ease-in-out infinite; transition: none; transform-origin: left center; }
+@keyframes export-indeterminate { 0% { transform: scaleX(.15); opacity: .55; } 50% { transform: scaleX(.65); opacity: 1; } 100% { transform: scaleX(.15); opacity: .55; } }
+@media (prefers-reduced-motion: reduce) {
+  .export-progress.indeterminate .export-progress-fill, .batch-row.indeterminate .batch-row-fill { animation: none; transform: scaleX(.35); }
+  .scan-loading-icon, .video-empty span.spinning { animation: none; }
+}
+.preview-debug { margin: var(--space-2) 2px 0; color: var(--text-faint); font-family: var(--font-mono); font-size: 9.5px; }
+.thumb-stats, .preview-debug { display: none; }
+.video-shell #poster-preview { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; background: var(--bg); }
+/* Portrait sources (probe rotation ±90): Chromium's media stack honours the
+   display matrix itself, so playback is already upright and no extra transform
+   is applied. If a media stack ever ignores the matrix the box stays landscape
+   and the renderer adds .rotated-apply from the shell box. */
+.video-shell video.rotated { transform-origin: center; }
+
+/* ---- Dialogs ---- */
+.settings-overlay { position: fixed; inset: 0; background: rgba(0, 0, 0, .6); backdrop-filter: blur(2px); display: grid; place-items: center; z-index: 50; }
+.settings-overlay[hidden] { display: none !important; }
+.settings-dialog { width: 420px; background: var(--overlay); border: 1px solid var(--line-strong); border-radius: var(--radius-lg); padding: var(--space-5); box-shadow: var(--shadow-2); }
+.settings-dialog h2 { margin: 0 0 var(--space-4); font-size: 15px; font-weight: 600; letter-spacing: .1px; }
+.settings-row { margin-bottom: var(--space-4); }
+.settings-row label { display: block; color: var(--text-muted); font-size: 11px; margin-bottom: 5px; }
+.settings-row select, .settings-loc input { width: 100%; height: var(--control-height); background: var(--raise); color: var(--text); border: 1px solid var(--line-strong); border-radius: var(--radius); padding: 0 8px; font-size: 11.5px; }
+.settings-loc { display: flex; gap: var(--space-2); }
+.settings-loc input { flex: 1; font-family: var(--font-mono); font-size: 11px; }
+.settings-loc button { height: var(--control-height); border: 1px solid var(--line-strong); border-radius: var(--radius); background: var(--raise); padding: 0 12px; font-size: 11.5px; }
+.settings-loc button:hover { border-color: var(--accent-line); }
+.settings-actions { text-align: right; }
+.settings-actions button { height: var(--control-height); border: 1px solid var(--line-strong); border-radius: var(--radius); background: var(--raise); color: var(--text); padding: 0 14px; font-size: 11.5px; }
+.settings-actions button:hover { border-color: var(--accent-line); }
+
+.source-dialog { width: min(620px, calc(100vw - 40px)); max-height: min(620px, calc(100vh - 40px)); display: flex; flex-direction: column; }
+.source-note { margin: -8px 0 var(--space-3); color: var(--text-muted); font-size: 11px; }
+.source-list { min-height: 72px; max-height: 420px; overflow: auto; margin-bottom: var(--space-4); border-top: 1px solid var(--line); }
+.source-row { display: grid; grid-template-columns: 22px minmax(0, 1fr) 28px; align-items: center; gap: var(--space-2); min-height: 44px; border-bottom: 1px solid var(--line); }
+.source-kind { color: var(--text-faint); text-align: center; font-size: 14px; }
+.source-path { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono); font-size: 10.5px; color: var(--text-muted); }
+.source-remove { width: 24px; height: 24px; padding: 0; border: 1px solid var(--line-strong); border-radius: var(--radius-sm); background: transparent; color: var(--text-muted); font-size: 15px; }
+.source-remove:hover { color: var(--err); border-color: var(--err); }
+.source-empty { padding: var(--space-5) var(--space-2); color: var(--text-muted); text-align: center; font-size: 11.5px; }
+
+/* Export progress dialog. Wider than settings so the 16:9 cover fits beside the
+   destination path without wrapping it. */
 .export-dialog { width: 460px; }
 .export-modal-body { display: flex; gap: var(--space-3); align-items: flex-start; }
-.export-modal-cover { flex: 0 0 132px; aspect-ratio: 16 / 9; overflow: hidden; border: 1px solid var(--border-strong); border-radius: var(--radius); background: var(--surface-elevated); }
+.export-modal-cover { flex: 0 0 132px; aspect-ratio: 16 / 9; overflow: hidden; border: 1px solid var(--line-strong); border-radius: var(--radius); background: #000; }
 .export-modal-cover img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .export-modal-facts { flex: 1 1 auto; min-width: 0; }
-.export-modal-name { margin: 0 0 6px; font-size: 12px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.export-modal-row { display: flex; gap: 8px; font-size: 11px; line-height: 1.6; }
-.export-modal-label { flex: 0 0 68px; color: var(--text-secondary); }
-/* The path is the one field that can overflow; clip it and keep the full
-   value in the title attribute. */
-.export-modal-value { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.export-modal-status { display: flex; justify-content: space-between; gap: 8px; margin-top: 6px; color: var(--text-secondary); font-size: 11px; }
-.export-modal-pct { flex: 0 0 auto; font-variant-numeric: tabular-nums; }
-/* ffmpeg reports no percentage while starting up or flushing. Animate the bar
-   instead of leaving it frozen at a stale width. */
-.export-progress.indeterminate .export-progress-fill { animation: export-indeterminate 1.1s ease-in-out infinite; transition: none; transform-origin: left center; }
-@keyframes export-indeterminate { 0% { transform: scaleX(.15); opacity: .55; } 50% { transform: scaleX(.65); opacity: 1; } 100% { transform: scaleX(.15); opacity: .55; } }
-@media (prefers-reduced-motion: reduce) { .export-progress.indeterminate .export-progress-fill { animation: none; transform: scaleX(.35); } }
-.preview-debug { margin: 10px 2px 0; color: var(--text-secondary); font-family: var(--font-mono); font-size: 9px; }
-.thumb-stats, .preview-debug { display: none; }
-.video-shell #poster-preview { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; background: #0c0e10; }
-/* Portrait sources (probe rotation ±90, e.g. DJI vertical clips): the renderer
-   marks the element with .rotated from asset.displayGeometry.original.rotation.
-   Chromium's media stack honors the display matrix itself (videoWidth/videoHeight
-   come out swapped, 2160x3840 for 0370), so playback is already upright and no
-   extra transform is applied. If a media stack ever ignores the matrix the box
-   stays landscape and the renderer adds .rotated-apply (exact rotate+scale is set
-   inline from the shell box, keeping the picture inside the shell). */
-.video-shell video.rotated { transform-origin: center; }
+.export-modal-name { margin: 0 0 6px; font-size: 12.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.export-modal-row { display: flex; gap: var(--space-2); font-size: 11.5px; line-height: 1.7; }
+.export-modal-label { flex: 0 0 68px; color: var(--text-muted); }
+/* The path is the one field that can overflow; clip it and keep the full value
+   in the title attribute. */
+.export-modal-value { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono); font-size: 11px; color: var(--text-muted); }
+.export-modal-status { display: flex; justify-content: space-between; gap: var(--space-2); margin-top: 6px; color: var(--text-muted); font-size: 11.5px; }
+.export-modal-pct { flex: 0 0 auto; font-family: var(--font-mono); font-size: 11px; }
+
+/* ---- Batch export ---- */
+.batch-dialog { width: 580px; }
+.batch-summary { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-2); font-size: 12.5px; }
+.batch-count { color: var(--text-muted); font-family: var(--font-mono); font-size: 11.5px; }
+.batch-destination { margin-top: var(--space-1); color: var(--text-faint); font-size: 10.5px; font-family: var(--font-mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Long selections must not push the dialog past the window: the list scrolls,
+   the summary and the actions stay put. */
+.batch-list { max-height: 46vh; overflow-y: auto; margin-top: var(--space-3); border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
+.batch-row { display: grid; grid-template-columns: minmax(0, 1fr) 88px 96px; align-items: center; gap: var(--space-3); padding: 8px var(--space-3); font-size: 11.5px; border-bottom: 1px solid var(--line); }
+.batch-row:last-child { border-bottom: 0; }
+.batch-row-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.batch-row-bar { height: 4px; overflow: hidden; border-radius: 2px; background: var(--line-strong); }
+.batch-row-fill { width: 0; height: 100%; border-radius: inherit; background: var(--accent); transition: width .2s linear; }
+.batch-row-state { text-align: right; color: var(--text-muted); font-family: var(--font-mono); font-size: 10.5px; }
+.batch-row.failed .batch-row-state { color: var(--err); }
+.batch-row.done .batch-row-state { color: var(--ok); }
+/* Setup sheet. The two options are the point of the phase, so they sit above the
+   clip list in their own raised block rather than as an afterthought. */
+.batch-options { display: grid; gap: var(--space-2); margin-top: var(--space-3); padding: var(--space-3); border: 1px solid var(--line); border-radius: var(--radius); background: var(--raise); }
+.batch-option { display: flex; align-items: center; gap: var(--space-2); font-size: 12px; }
+label.batch-option { cursor: pointer; }
+.batch-option input[type="checkbox"] { accent-color: var(--accent); }
+.batch-option-body { display: grid; gap: 1px; }
+.batch-option-name { color: var(--text); }
+.batch-option-hint { color: var(--text-faint); font-size: 10.5px; }
+.batch-option-main { display: flex; align-items: center; gap: var(--space-2); cursor: pointer; }
+.batch-option select { margin-left: auto; height: var(--control-height); max-width: 240px; padding: 0 8px; background: var(--surface); color: var(--text); border: 1px solid var(--line-strong); border-radius: var(--radius); font-size: 11.5px; }
+.batch-option select:disabled { opacity: .5; }
+.batch-pick-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: var(--space-3); padding: 8px var(--space-3); font-size: 11.5px; border-bottom: 1px solid var(--line); }
+.batch-pick-row:last-child { border-bottom: 0; }
+.batch-pick-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.batch-pick-tag { color: var(--accent); font-family: var(--font-mono); font-size: 10px; border: 1px solid var(--accent-line); border-radius: 3px; padding: 1px 6px; white-space: nowrap; }
+/* Applied only when a media stack ignores the display matrix: the renderer then
+   sets an exact rotate+scale inline from the shell box, so this only needs to
+   keep the origin centred. */
+.video-shell video.rotated-apply { transform-origin: center; }

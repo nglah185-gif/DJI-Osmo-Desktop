@@ -73,6 +73,14 @@ test("hardware encoders map quality onto their own scale instead of reusing CRF"
   assert.throws(() => hardwareEncoderArgs("h264_madeup"), /Unknown hardware encoder/);
 });
 
+test("h264_mf stays at the top of its quality scale", () => {
+  // The scale runs 0-100 with higher meaning better, and 60 was measurably
+  // lossy (45.4 dB against 52.0 dB) for no speed gain. A later "optimisation"
+  // that lowers this would silently degrade irreplaceable footage.
+  const args = hardwareEncoderArgs("h264_mf");
+  assert.deepEqual(args, ["-c:v", "h264_mf", "-rate_control", "quality", "-quality", "100", "-pix_fmt", "yuv420p"]);
+});
+
 test("encoderArgs falls back to software for null and for libx264 by name", () => {
   assert.deepEqual(encoderArgs(null), softwareEncoderArgs());
   assert.deepEqual(encoderArgs("libx264"), softwareEncoderArgs());
