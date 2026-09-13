@@ -49,12 +49,37 @@ $appExe = Join-Path $target "DJI Osmo Desktop.exe"
 Move-Item -LiteralPath $electronExe -Destination $appExe
 
 @"
-DJI Osmo Desktop $version - Portable Test Build
+DJI Osmo Desktop $version - portable build
+==========================================
 
-1. Extract the complete ZIP before running.
-2. Launch DJI Osmo Desktop.exe.
-3. Keep only one application instance open.
-4. This is an unsigned test build; Windows SmartScreen may show a warning.
+1. Extract the WHOLE zip before running. The application reads files from the
+   folder next to the executable, so running it from inside the zip will fail.
+2. Launch "DJI Osmo Desktop.exe".
+3. Keep only one instance open.
+
+What is included
+----------------
+- The application itself (Electron runtime + source)
+- ffmpeg and ffprobe in resources\bin
+- Official Rec.709 LUTs and watermark images in resources
+  (these remain the property of DJI and are used under their own terms)
+
+GPU acceleration
+----------------
+Colour restoration uses the GPU through ffmpeg's libplacebo filter when the
+graphics driver exposes Vulkan. If it does not, the export falls back to the CPU
+automatically. No configuration is needed.
+
+Where exports go
+----------------
+The export location is set in Settings. Exports never modify the files on the
+camera card.
+
+Windows SmartScreen
+-------------------
+This is an unsigned build, so Windows may show a warning the first time you run
+it. Choose "More info" -> "Run anyway", or verify the download against the
+SHA-256 listed on the release page.
 "@ | Set-Content -LiteralPath (Join-Path $target "README.txt") -Encoding UTF8
 
 Compress-Archive -LiteralPath $target -DestinationPath $zipPath -CompressionLevel Optimal
