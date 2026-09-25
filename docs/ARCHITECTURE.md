@@ -1,6 +1,6 @@
 # Architecture
 
-How the application is put together, as of v2.4.0. The per-phase notes in
+How the application is put together, as of v2.5.0. The per-phase notes in
 [`notes/`](notes/) record how each piece got here; this file describes the state
 that resulted.
 
@@ -105,6 +105,28 @@ When a clip has no LRF companion and its codec is not editable directly,
 Anything that can fail has a fallback path: hardware encoder → software, GPU LUT
 → CPU LUT, stream copy → re-encode.
 
+## Watermark catalogue
+
+`src/watermark/watermark-registry.js` is the single authority on which badge is
+which. DJI's artwork names itself in its own file names — `pic_watermark_oa4_1.png`
+is token `oa4`, variant 1 — so the registry parses the file name into a device
+family, a variant kind (`standard`, `borderless`, `frame`, `partner`, `seasonal`)
+and a brand where one applies, then derives a stable id
+(`action4.official.oa4.coros`). All 192 badges across 19 tokens resolve this way,
+with no two files claiming the same id (a test enforces both).
+
+`forCameraModel()` maps a camera model from the media pipeline to one device
+token set; an unrecognised model is not a dead end — the UI offers the whole
+default device set instead of a single badge. `catalog()` groups every badge by
+device in a fixed reading order: cameras first, the novelty badge last.
+
+The renderer never names a badge file. `main.js` serves them over
+`dji-media://asset/watermark/<id>` from an allow-list built by the registry, and
+`src/renderer/badge-picker.js` — pure, unit-tested label and grouping logic —
+decides what each row is called. Rows carry their own preview for a reason: two
+badges of the same device differ only in the artwork, so a list of names could
+not tell them apart.
+
 ## Batch export
 
 `src/tasks/export-queue.js` is a serial-by-default queue: per-item state,
@@ -129,6 +151,7 @@ Vanilla DOM, no framework, one HTML file and one stylesheet.
 index.html ──► styles.css
            ──► virtual-grid.js      windowing; renders only visible rows
            ──► renderer-phase3.js   the controller
+           ──► badge-picker.js      badge labels and grouping (pure)
            ──► batch-export-state.js / batch-export-options.js  presentation state
            ──► export-modal-state.js
            ──► editor-ui-state.js   inspectors, timeline, controls

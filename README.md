@@ -6,7 +6,7 @@ clip actually is, restores D-Log / D-Log M to Rec.709 with DJI's own transform,
 optionally burns in the official camera watermark, and exports H.264 MP4 —
 one clip at a time or a whole card in one go.
 
-Current release: **v2.4.0** — the portable build is attached to
+Current release: **v2.5.0** — the portable build is attached to
 [Releases](https://github.com/nglah185-gif/DJI-Osmo-Desktop/releases).
 
 ## What it does
@@ -16,10 +16,11 @@ Current release: **v2.4.0** — the portable build is attached to
 | **Camera library** | Detects a connected DJI camera, scans `DCIM`, and lists video, photos and LRF proxies without copying anything first. |
 | **Local library** | Add folders or import individual files; camera and local media share one grid. |
 | **D-Log restoration** | The colour mode is read from the clip's own DJI metadata rather than guessed from the filename, and the matching first-party Rec.709 transform is applied. The chain keeps 10-bit precision end to end. Batch export can also be told the model by hand for footage whose metadata no longer names the camera. |
-| **Watermarks** | Official per-camera badges. Size and placement come from an ink box measured off each asset, so the mark lands on the same visual line on landscape video, portrait video and stills alike. |
-| **Editing** | Non-destructive trim, speed, rotate, crop and flip, plus the creative LUTs that ship for some models. Source files are never modified. |
+| **Watermarks** | All 192 official badges DJI ships, mapped to the 19 device tokens behind their file names and offered through a picker that draws each badge instead of naming it. The list is grouped by device with the clip's own model first and the plain styles leading each group; footage whose model cannot be identified still gets the default device's whole set. Size and placement come from an ink box measured off each asset, so the mark lands on the same visual line on landscape video, portrait video and stills alike. |
+| **Editing** | Non-destructive trim, speed, rotate, crop and flip, plus the creative LUTs that ship for some models. The trim is a bracketed range — `[=====]` — whose cut ends are hatched and whose brackets follow the drag. Source files are never modified. |
+| **Interface** | A darkroom: the picture sits on the darkest surface, the two side rails a step above it, and glass is spent only on content. Both rails are resizable by dragging the seam (double-click resets, arrows nudge), and the media grid re-lays itself out to fill the rail. |
 | **Live preview** | A frame streamer driven by the *same* effect graph the export uses, so the preview cannot disagree with the file. |
-| **Export** | Single clip or a batch. A clip with no changes is stream-copied at the speed of the card; anything with an effect is re-encoded. Batch exports are resumable and cancellable per item. |
+| **Export** | Single clip or a batch, video and stills together. A clip with no changes is stream-copied at the speed of the card; anything with an effect is re-encoded. Photos keep their EXIF and are stamped with their capture time. Batch exports are resumable and cancellable per item. |
 | **GPU acceleration** | The 3D LUT runs on the GPU through ffmpeg's `libplacebo` (Vulkan) where available — measured 1.73x on a 4K D-Log export — with an automatic fallback to the CPU path when the build, the driver or the GPU cannot provide it. |
 | **Bilingual UI** | English and 简体中文. |
 
@@ -72,9 +73,14 @@ own licences.
 
 ### Supported cameras
 
-Colour profiles and watermark families exist for Action 4, Action 5 Pro,
-Action 6, Pocket 3, Pocket 4, Pocket 4 Pro and Osmo Nano. Anything else is
-treated as a plain H.264/HEVC source with no restoration offered.
+Watermark badges exist for every device DJI ships artwork for: Action 3, Action
+4, Action 5, Action 5 Pro, Action 6, Pocket 3, Pocket 4, Pocket 4 Pro, Osmo Nano,
+Osmo 360, Osmo Mobile 6/7/7 Pro/8/8 Pro, plus the partner marks (COROS, HUAWEI,
+iGPSPORT, Magene, SUUNTO, EB100 and the Huawei watch co-brands) and the seasonal
+one. Colour profiles ship for Action 4, Action 5 Pro and Action 6; the batch
+dialog can be told the model by hand for anything else. A camera the application
+does not recognise is treated as a plain H.264/HEVC source with no restoration
+offered, but with the full default set of badges still available.
 
 ## Development
 
