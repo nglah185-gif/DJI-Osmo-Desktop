@@ -77,10 +77,20 @@ Watermark badges exist for every device DJI ships artwork for: Action 3, Action
 4, Action 5, Action 5 Pro, Action 6, Pocket 3, Pocket 4, Pocket 4 Pro, Osmo Nano,
 Osmo 360, Osmo Mobile 6/7/7 Pro/8/8 Pro, plus the partner marks (COROS, HUAWEI,
 iGPSPORT, Magene, SUUNTO, EB100 and the Huawei watch co-brands) and the seasonal
-one. Colour profiles ship for Action 4, Action 5 Pro and Action 6; the batch
-dialog can be told the model by hand for anything else. A camera the application
-does not recognise is treated as a plain H.264/HEVC source with no restoration
-offered, but with the full default set of badges still available.
+one. Colour restoration covers the seven bodies the application holds a DJI
+transform for — Action 4, Action 5 Pro, Action 6, Pocket 3, Pocket 4, Pocket 4
+Pro and Osmo Nano — and the batch dialog can be pointed at any of them by hand
+when a file's metadata no longer names its camera. The three Action transforms
+ship inside the official DJI downloads in `cube&luts`; the Pocket and Nano ones
+came out of the DJI Mimo asset set and live in `lut&log`, which is optional —
+without that folder the application simply offers fewer models.
+
+Two cases are deliberately left alone. Bodies that record plain Rec.709 (Action
+3, Action 5, the gimbals) have nothing to restore. A log flavour DJI has not
+published a transform for — Osmo 360, the newer D-Log 2 profiles — is not pushed
+through a neighbouring model's LUT, because a wrong transform is much harder to
+notice than a missing one. A camera the application does not recognise is treated
+as a plain H.264/HEVC source, but always keeps the full set of badges.
 
 ## Development
 
