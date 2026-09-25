@@ -587,7 +587,7 @@ function playClockSilently() {
     if (!isPhoto && autoPreset !== "normal") await edit();
   }
 
-  function syncInspectorFromEditor() { const editor = state.editor || {}; const clip = editor.clip || {}; const tf = editor.displayTransform || {}; const technical = editor.technicalTransform || (editor.colorPreset === "action4-dlogm" ? "action4" : editor.colorPreset === "action5pro-dlogm" ? "action5pro" : editor.colorPreset === "action6-dlogm" ? "action6" : "none"); const creative = editor.creativeLook !== undefined ? editor.creativeLook : ""; $("color-profile").value = editorUiState.colorProfileForTechnical(technical); $("technical-transform").value = technical; $("creative-look").value = creative; $("trim-in").value = editorUiState.secondsFromMicroseconds(clip.sourceInUs); $("trim-out").value = editorUiState.secondsFromMicroseconds(clip.sourceOutUs); $("speed").value = String(clip.playbackRate || 1); $("rotate").value = String(tf.rotation || 0); $("crop").value = String(tf.crop && tf.crop.left || 0); $("flip-h").checked = !!tf.flipHorizontal; $("flip-v").checked = !!tf.flipVertical; const wm = editor.watermark || {}; $("watermark-enable").checked = !!wm.enabled; $("watermark").disabled = !wm.enabled; $("watermark").value = wm.id || "none"; $("watermark-scale").value = String(editorUiState.numberOrDefault(wm.scale, 0.195)); $("watermark-opacity").value = String(editorUiState.numberOrDefault(wm.opacity, 1)); editorBadgePicker.refresh(); }
+  function syncInspectorFromEditor() { const editor = state.editor || {}; const clip = editor.clip || {}; const tf = editor.displayTransform || {}; const technical = editor.technicalTransform || (editor.colorPreset === "action4-dlogm" ? "action4" : editor.colorPreset === "action5pro-dlogm" ? "action5pro" : editor.colorPreset === "action6-dlogm" ? "action6" : "none"); const creative = editor.creativeLook !== undefined ? editor.creativeLook : ""; $("color-profile").value = editorUiState.colorProfileForTechnical(technical); $("technical-transform").value = technical; $("creative-look").value = creative; $("trim-in").value = editorUiState.secondsFromMicroseconds(clip.sourceInUs); $("trim-out").value = editorUiState.secondsFromMicroseconds(clip.sourceOutUs); $("speed").value = String(clip.playbackRate || 1); $("rotate").value = String(tf.rotation || 0); $("crop").value = String(tf.crop && tf.crop.left || 0); $("flip-h").checked = !!tf.flipHorizontal; $("flip-v").checked = !!tf.flipVertical; const wm = editor.watermark || {}; $("watermark-enable").checked = !!wm.enabled; $("watermark").disabled = !wm.enabled; $("watermark").value = wm.id || "none"; $("watermark-scale").value = String(editorUiState.numberOrDefault(wm.scale, 0.195)); $("watermark-opacity").value = String(editorUiState.numberOrDefault(wm.opacity, 1)); editorBadgePicker.refresh(); paintExportSpec(); const exportSection = document.querySelector('.acc-item[data-acc="export"]'); if (exportSection) exportSection.hidden = !editor.clip || (state.asset && state.asset.mediaKind === "photo"); }
 
   function editorFromControls() { const editor = state.editor || {}; const clip = { ...(editor.clip || {}) }; const durationUs = Number(clip.sourceOutUs || video.duration * 1000000 || 1); let segments = timelineModel ? timelineModel.normalize(editor.segments, durationUs) : []; const sourceIn = editorUiState.microsecondsFromSeconds($("trim-in").value); const requestedOut = editorUiState.microsecondsFromSeconds($("trim-out").value); if (!segments.length) segments = [{ id: "segment-1", sourceInUs: sourceIn, sourceOutUs: Math.max(sourceIn + 1, requestedOut || durationUs) }]; const first = segments[0], last = segments[segments.length - 1]; clip.sourceInUs = first.sourceInUs; clip.sourceOutUs = last.sourceOutUs; clip.playbackRate = Number($("speed").value) || 1; const creativeLook = $("creative-look").value; const colorProfile = $("color-profile").value; const technicalTransform = $("technical-transform").value; const watermark = editorUiState.watermarkFromControls({ id: $("watermark").value, enabled: $("watermark-enable").checked, scale: $("watermark-scale").value, opacity: $("watermark-opacity").value, position: state.wmPosition }, WM_POSITIONS); return { ...editor, clip, segments, colorPreset: presetFor(colorProfile, technicalTransform, creativeLook), technicalTransform, creativeLook, displayTransform: { rotation: Number($("rotate").value) || 0, crop: { left: Number($("crop").value) || 0, top: 0, right: 0, bottom: 0 }, flipHorizontal: $("flip-h").checked, flipVertical: $("flip-v").checked }, watermark }; }
 
@@ -1319,6 +1319,9 @@ video.addEventListener("timeupdate", () => { if (state.mode === "edit" && state.
   // Video specification choices survive between batch dialogs in one session;
   // the defaults are "source / quality / 8-bit", i.e. the single-export path.
   let videoOptions = videoOptionsState ? videoOptionsState.initialState() : null;
+  // The clip inspector keeps its own spec: a batch's resolution choice is not a
+  // statement about the clip that happens to be open.
+  let exportOptions = videoOptionsState ? videoOptionsState.initialState() : null;
   const batchRowNodes = new Map();
   function renderBatchRows(items) {
     const list = $("batch-modal-list");
@@ -1423,39 +1426,43 @@ video.addEventListener("timeupdate", () => { if (state.mode === "edit" && state.
       list.appendChild(row);
     }
   }
+  // The batch sheet and the clip inspector ask the same questions, so they are
+  // painted and bound by the same two helpers; only the id prefix differs.
+  function paintVideoSpecControls(prefix, model) {
+    const fill = (id, entries, value) => {
+      const select = $(id);
+      if (!select) return;
+      const signature = entries.map(entry => entry.value).join(",");
+      if (select.dataset.signature !== signature) {
+        select.replaceChildren();
+        for (const entry of entries) select.appendChild(new Option(ts(entry.labelKey), entry.value));
+        select.dataset.signature = signature;
+      }
+      select.value = value;
+    };
+    fill(prefix + "-option-resolution", model.resolutions, model.resolution);
+    fill(prefix + "-option-fps", model.frameRates, model.fps);
+    fill(prefix + "-option-rate", model.rateModes, model.rate);
+    fill(prefix + "-option-codec", model.codecs, model.codec);
+    const bitrateRow = $(prefix + "-bitrate-row");
+    if (bitrateRow) bitrateRow.hidden = !model.bitrateVisible;
+    const bitrate = $(prefix + "-option-bitrate");
+    if (bitrate) bitrate.value = String(model.bitrateMbps);
+    const tenBit = $(prefix + "-option-tenbit");
+    if (tenBit) { tenBit.checked = model.tenBit; tenBit.disabled = model.tenBitDisabled; }
+  }
+  function bindVideoSpecControls(prefix, mutate) {
+    const bind = (suffix, event, handler) => { const control = $(prefix + "-option-" + suffix); if (control) control.addEventListener(event, handler); };
+    bind("resolution", "change", event => mutate(current => videoOptionsState.setResolution(current, event.target.value)));
+    bind("fps", "change", event => mutate(current => videoOptionsState.setFps(current, event.target.value)));
+    bind("rate", "change", event => mutate(current => videoOptionsState.setRate(current, event.target.value)));
+    bind("codec", "change", event => mutate(current => videoOptionsState.setCodec(current, event.target.value)));
+    bind("bitrate", "change", event => mutate(current => videoOptionsState.setBitrate(current, event.target.value)));
+    bind("tenbit", "change", event => mutate(current => videoOptionsState.setTenBit(current, event.target.checked)));
+  }
   function paintVideoSpec() {
     if (!videoOptions || !videoOptionsState) return;
-    const model = videoOptionsState.view(videoOptions);
-    const resolution = $("batch-option-resolution");
-    if (resolution) {
-      resolution.replaceChildren();
-      for (const entry of model.resolutions) resolution.appendChild(new Option(ts(entry.labelKey), entry.value));
-      resolution.value = model.resolution;
-    }
-    const fps = $("batch-option-fps");
-    if (fps) {
-      fps.replaceChildren();
-      for (const entry of model.frameRates) fps.appendChild(new Option(ts(entry.labelKey), entry.value));
-      fps.value = model.fps;
-    }
-    const rate = $("batch-option-rate");
-    if (rate) {
-      rate.replaceChildren();
-      for (const entry of model.rateModes) rate.appendChild(new Option(ts(entry.labelKey), entry.value));
-      rate.value = model.rate;
-    }
-    const codec = $("batch-option-codec");
-    if (codec) {
-      codec.replaceChildren();
-      for (const entry of model.codecs) codec.appendChild(new Option(ts(entry.labelKey), entry.value));
-      codec.value = model.codec;
-    }
-    const bitrateRow = $("batch-bitrate-row");
-    if (bitrateRow) bitrateRow.hidden = !model.bitrateVisible;
-    const bitrate = $("batch-option-bitrate");
-    if (bitrate) bitrate.value = String(model.bitrateMbps);
-    const tenBit = $("batch-option-tenbit");
-    if (tenBit) { tenBit.checked = model.tenBit; tenBit.disabled = model.tenBitDisabled; }
+    paintVideoSpecControls("batch", videoOptionsState.view(videoOptions));
   }
   function updateVideoOptions(mutate) {
     if (!videoOptions || !videoOptionsState) return;
@@ -1463,6 +1470,25 @@ video.addEventListener("timeupdate", () => { if (state.mode === "edit" && state.
     if (next === videoOptions) return;
     videoOptions = next;
     paintVideoSpec();
+  }
+  function paintExportSpec() {
+    if (!videoOptionsState) return;
+    if (!exportOptions) exportOptions = videoOptionsState.initialState();
+    paintVideoSpecControls("export", videoOptionsState.view(exportOptions));
+    // The primary button names the container it will write, so the codec choice
+    // is visible without opening the section.
+    const label = $("export-button") && $("export-button").querySelector("span");
+    if (label) label.textContent = ts(exportOptions.codec === "hevc" ? "export.buttonHevc" : "export.buttonH264");
+  }
+  function updateExportOptions(mutate) {
+    if (!exportOptions || !videoOptionsState) return;
+    const next = mutate(exportOptions);
+    if (next === exportOptions) return;
+    exportOptions = next;
+    paintExportSpec();
+  }
+  function exportSpecPayload() {
+    return videoOptionsState && exportOptions ? videoOptionsState.payload(exportOptions) : undefined;
   }
   function paintBatchSetup() {
     if (!batchOptions) return;
@@ -1580,12 +1606,8 @@ video.addEventListener("timeupdate", () => { if (state.mode === "edit" && state.
   $("batch-option-color-mode") && $("batch-option-color-mode").addEventListener("change", event => updateBatchOptions(current => batchOptionsState.setColorMode(current, event.target.value)));
   $("batch-option-watermark") && $("batch-option-watermark").addEventListener("change", event => updateBatchOptions(current => batchOptionsState.setWatermarkEnabled(current, event.target.checked)));
   $("batch-option-watermark-id") && $("batch-option-watermark-id").addEventListener("change", event => updateBatchOptions(current => batchOptionsState.setWatermarkId(current, event.target.value)));
-  $("batch-option-resolution") && $("batch-option-resolution").addEventListener("change", event => updateVideoOptions(current => videoOptionsState.setResolution(current, event.target.value)));
-  $("batch-option-fps") && $("batch-option-fps").addEventListener("change", event => updateVideoOptions(current => videoOptionsState.setFps(current, event.target.value)));
-  $("batch-option-rate") && $("batch-option-rate").addEventListener("change", event => updateVideoOptions(current => videoOptionsState.setRate(current, event.target.value)));
-  $("batch-option-codec") && $("batch-option-codec").addEventListener("change", event => updateVideoOptions(current => videoOptionsState.setCodec(current, event.target.value)));
-  $("batch-option-bitrate") && $("batch-option-bitrate").addEventListener("change", event => updateVideoOptions(current => videoOptionsState.setBitrate(current, event.target.value)));
-  $("batch-option-tenbit") && $("batch-option-tenbit").addEventListener("change", event => updateVideoOptions(current => videoOptionsState.setTenBit(current, event.target.checked)));
+  bindVideoSpecControls("batch", mutate => updateVideoOptions(mutate));
+  bindVideoSpecControls("export", mutate => updateExportOptions(mutate));
   $("batch-modal-close") && $("batch-modal-close").addEventListener("click", closeBatchModal);
   $("batch-modal-cancel") && $("batch-modal-cancel").addEventListener("click", async () => {
     if (!batchModal || !batchModal.batchId) return;
@@ -1619,7 +1641,7 @@ video.addEventListener("timeupdate", () => { if (state.mode === "edit" && state.
     openExportModal(state.asset, editor);
     setAssetControls(state.asset);
     try {
-      const result = exportAs ? await api.exportEditAs({ assetId, editor }) : await api.exportEdit({ assetId, editor });
+      const result = exportAs ? await api.exportEditAs({ assetId, editor, videoSpec: exportSpecPayload() }) : await api.exportEdit({ assetId, editor, videoSpec: exportSpecPayload() });
       if (result && result.canceled) updateExportModal(assetId, exportModalState.applyCanceled);
       else updateExportModal(assetId, previous => exportModalState.applyDone(previous, result || {}));
       if (state.asset && state.asset.id === assetId) $("export-status").textContent = result.canceled ? ts("export.canceled") : ts("export.done", { path: result.outputPath || "" });
