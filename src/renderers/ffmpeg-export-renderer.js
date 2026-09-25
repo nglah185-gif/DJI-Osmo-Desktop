@@ -6,6 +6,7 @@ const { EncoderSelector, encoderArgs, encoderPixelFormat, hardwareDecodeArgs, is
 const { planExport, planAudio, PASSTHROUGH } = require("./export-plan");
 const { probeSourceStreams } = require("./source-probe");
 const { GpuLutSupport, isGpuLutFailure } = require("./gpu-lut");
+const { normalizeVideoSpec, isDefaultVideoSpec, videoSpecGraphOptions } = require("./video-spec");
 
 // Each capability probe gets a hard deadline. A one-frame encode takes well
 // under a second on any working driver, so anything near this is a wedged
@@ -32,9 +33,12 @@ class FfmpegExportRenderer {
       runFfmpeg: (command, args) => run(command, args, { spawnProcess: this.spawnProcess, timeoutMs: Number(options.probeTimeoutMs) || PROBE_TIMEOUT_MS })
     });
   }
-  async render({ inputPath, outputPath, graph, lutRegistry, styleRegistry, durationSeconds = null, timestampSeconds = null, clip = null, onProgress = null, signal = null }) {
+  async render({ inputPath, outputPath, graph, lutRegistry, styleRegistry, durationSeconds = null, timestampSeconds = null, clip = null, onProgress = null, signal = null, videoSpec = null }) {
     if (!inputPath || !outputPath) throw new Error("Export input and output paths are required");
     if (path.resolve(inputPath) === path.resolve(outputPath)) throw new Error("Export output must be different from the source file");
+    const spec = normalizeVideoSpec(videoSpec);
+    const pixelFormat = encoderPixelFormat({ codec: spec.codec, tenBit: spec.tenBit });
+    const specGraphOptions = videoSpecGraphOptions(spec);
     const sourceIn = clip ? Number(clip.sourceInUs || 0) / 1000000 : timestampSeconds;
     const sourceDuration = clip ? (Number(clip.sourceOutUs) - Number(clip.sourceInUs)) / 1000000 : durationSeconds;
     const requestedSpeed = clip ? Number(clip.playbackRate ?? 1) : 1;
@@ -64,7 +68,10 @@ class FfmpegExportRenderer {
     const progressDuration = resolveProgressDuration({ outputDuration, probeDuration: probe.durationSeconds, speed });
     const plan = planExport({ graph, clip, previewSize: graph && graph.previewSize });
     const audioPlan = planAudio({ clip, sourceCodec: probe.audioCodec });
-    const canCopyVideo = plan.mode === PASSTHROUGH && probe.videoCopyable;
+    // A stream copy cannot change resolution, frame rate or bit depth, so any
+    // explicit video specification forces the transcode path even when the
+    // effect graph alone would have allowed a remux.
+    const canCopyVideo = plan.mode === PASSTHROUGH && probe.videoCopyable && isDefaultVideoSpec(spec);
 
     if (canCopyVideo) {
       const copyArgs = buildCopyArgs({
@@ -99,7 +106,13 @@ class FfmpegExportRenderer {
       // afterwards, so a change to the graph's first filter cannot silently drop
       // the setpts and export at the wrong speed.
       inputPrefix: speed !== 1 ? "setpts=PTS/" + speed.toFixed(3) + "," : "",
-      outputFormat: encoderPixelFormat(),
+      outputFormat: pixelFormat,
+      // Composite the watermark in the encoder's own pixel format and size it
+      // from the probed width: measured +4.1s per 10s of 4K60 export otherwise.
+      overlayFormat: pixelFormat,
+      videoWidth: width,
+      outputHeight: specGraphOptions.outputHeight,
+      outputFps: specGraphOptions.outputFps,
       lutEngine
     });
     // Only a technical color transform has a GPU path, so a graph without one
@@ -112,9 +125,10 @@ class FfmpegExportRenderer {
       encoder, inputPath, outputPath, filterGraph: compiled.filterGraph, inputArgs: compiled.inputArgs,
       sourceIn, sourceDuration: encodeDuration, speed, muted, volume,
       width, height, platform: this.platform,
-      audioMode: probe.hasAudio ? audioPlan.mode : "drop"
+      audioMode: probe.hasAudio ? audioPlan.mode : "drop",
+      pixelFormat, tenBit: spec.tenBit, videoBitrate: spec.videoBitrate, codec: spec.codec
     });
-    const hardwareEncoder = await this.encoderSelector.select();
+    const hardwareEncoder = await this.encoderSelector.select({ codec: spec.codec, tenBit: spec.tenBit });
     let encoder = hardwareEncoder;
     let result = await run(this.ffmpegPath, buildArgs(encoder), { onProgress, durationSeconds: progressDuration, signal, spawnProcess: this.spawnProcess });
     // libplacebo can be listed by the build and still refuse to run here (no
@@ -148,7 +162,7 @@ class FfmpegExportRenderer {
       await fs.rm(outputPath, { force: true }).catch(() => {});
       throw new Error("Export failed: " + result.stderr);
     }
-    return { outputPath, filterGraph: compiled.filterGraph, generatedLuts: compiled.generatedLuts, elapsedMs: result.elapsedMs, encoder: encoder || "libx264", hardwareEncoder: !!encoder, mode: "transcode", lutEngine, planReasons: plan.reasons, audioMode: probe.hasAudio ? audioPlan.mode : "drop" };
+    return { outputPath, filterGraph: compiled.filterGraph, generatedLuts: compiled.generatedLuts, elapsedMs: result.elapsedMs, encoder: encoder || (spec.codec === "hevc" ? "libx265" : "libx264"), hardwareEncoder: !!encoder, mode: "transcode", lutEngine, planReasons: plan.reasons, audioMode: probe.hasAudio ? audioPlan.mode : "drop", videoSpec: spec };
   }
 }
 
@@ -191,7 +205,7 @@ function buildCopyArgs({ inputPath, outputPath, sourceIn, sourceDuration, audioM
   return args;
 }
 
-function buildExportArgs({ encoder, inputPath, outputPath, filterGraph, inputArgs = [], sourceIn, sourceDuration, speed, muted, volume, width, height, platform = process.platform, audioMode = "encode" }) {
+function buildExportArgs({ encoder, inputPath, outputPath, filterGraph, inputArgs = [], sourceIn, sourceDuration, speed, muted, volume, width, height, platform = process.platform, audioMode = "encode", tenBit = false, videoBitrate = null, codec = null }) {
   const args = ["-y", "-v", "error", "-progress", "pipe:2", "-nostats"];
   // -hwaccel is an input option: it has to precede the -i it applies to, and it
   // applies only to the next input, so it goes here rather than with inputArgs
@@ -205,7 +219,10 @@ function buildExportArgs({ encoder, inputPath, outputPath, filterGraph, inputArg
   // stream timecode tag. A filtered stream carries no metadata of its own, so
   // the source's has to be mapped explicitly.
   args.push("-map_metadata", "0");
-  args.push(...encoderArgs(encoder, { width, height }));
+  args.push(...encoderArgs(encoder, { width, height, tenBit, videoBitrate }));
+  // HEVC in MP4 must be tagged hvc1 or QuickTime and many hardware players
+  // reject the file even though ffmpeg wrote it happily. See buildCopyArgs.
+  if (String(codec || "").toLowerCase() === "hevc") args.push("-tag:v", "hvc1");
   // Audio is copied when nothing asked for it to change. Re-encoding untouched
   // AAC costs a full decode/encode pass and loses quality for no reason.
   if (muted || audioMode === "drop") args.push("-an");

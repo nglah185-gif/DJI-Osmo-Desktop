@@ -22,7 +22,6 @@ const { execFileSync, spawn } = require("node:child_process");
 const PROJECT = path.resolve(__dirname, "..");
 const WORKSPACE = path.resolve(PROJECT, "..");
 const FFMPEG = path.join(PROJECT, "bin", "ffmpeg.exe");
-const FFPROBE = path.join(PROJECT, "bin", "ffprobe.exe");
 const INK_CACHE = path.join(process.env.APPDATA || PROJECT, "dji-osmo-desktop-v2", "watermark-ink");
 
 const JOB_DIR = process.env.EXPORT_JOB_DIR || "E:\\_dji_export_job";
@@ -41,7 +40,10 @@ const { createEffectGraph } = require("../src/color/effect-graph");
 const { technicalTransformFor } = require("../src/color/auto-restore");
 const { FfmpegExportRenderer } = require("../src/renderers/ffmpeg-export-renderer");
 const { createWatermarkRegistry } = require("../src/watermark/watermark-registry");
-const { inkOverlayFilters, INK_CENTER_Y_RATIO, INK_WIDTH_RATIO } = require("../src/watermark/watermark-position");
+const { INK_WIDTH_RATIO } = require("../src/watermark/watermark-position");
+// The still path is shared with the GUI batch so a script run and a click run
+// produce the same bytes, including the EXIF and the capture time.
+const { exportJpeg, captureTimeFor, stampCaptureTime } = require("../src/renderers/jpeg-export");
 
 const started = Date.now();
 function log(message) {
@@ -61,49 +63,6 @@ function targetPath(directory, fileName) {
   let counter = 1;
   while (fs.existsSync(candidate)) candidate = path.join(directory, stem + " (" + (++counter) + ")" + extension);
   return candidate;
-}
-
-function sleep(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
-
-// ffmpeg's mjpeg output carries no EXIF, so a watermarked photo would lose the
-// capture time, GPS and maker notes that make it findable later. The source's
-// APP1/APP2/APP13 segments are copied into the finished file byte for byte,
-// after the JFIF header, which is where readers expect them.
-function copyJpegMetadata(sourcePath, targetPath) {
-  const source = fs.readFileSync(sourcePath);
-  const target = fs.readFileSync(targetPath);
-  const carried = [];
-  let offset = 2;
-  while (offset + 4 <= source.length && source[offset] === 0xff) {
-    const marker = source[offset + 1];
-    if (marker === 0xda || marker === 0xd9) break;
-    const length = source.readUInt16BE(offset + 2);
-    if (length < 2) break;
-    const end = offset + 2 + length;
-    if (end > source.length) break;
-    if (marker === 0xe1 || marker === 0xe2 || marker === 0xed) carried.push(source.subarray(offset, end));
-    offset = end;
-  }
-  if (!carried.length) return false;
-
-  const app0 = [];
-  const rest = [];
-  offset = 2;
-  while (offset + 4 <= target.length && target[offset] === 0xff) {
-    const marker = target[offset + 1];
-    if (marker === 0xda || marker === 0xd9) break;
-    const length = target.readUInt16BE(offset + 2);
-    if (length < 2) break;
-    const end = offset + 2 + length;
-    if (end > target.length) break;
-    const segment = target.subarray(offset, end);
-    if (marker === 0xe0 && !app0.length) app0.push(segment);
-    else if (marker !== 0xe1 && marker !== 0xe2 && marker !== 0xed) rest.push(segment);
-    offset = end;
-  }
-  const header = Buffer.concat([target.subarray(0, 2), ...app0, ...carried, ...rest]);
-  fs.writeFileSync(targetPath, Buffer.concat([header, target.subarray(offset)]));
-  return true;
 }
 
 // The machine must not fall asleep mid-job: 12 hours of unattended work would
@@ -171,26 +130,23 @@ function stopKeepAwake() { if (keepAwake) { try { keepAwake.kill(); } catch {} k
       timestampSeconds: 0,
       onProgress: pct => { const step = Math.floor(pct / 25); if (step > lastLogged) { lastLogged = step; if (step < 4) log("    " + path.basename(output) + " " + pct + "%"); } }
     });
+    stampCaptureTime(output, captureTimeFor(asset.original.path, asset.original.name));
     const size = fs.statSync(output).size;
     return { output, size, detail: "transcode:" + transform + " lut=" + result.lutEngine + " enc=" + result.encoder + " " + (result.elapsedMs / 1000).toFixed(1) + "s" };
   }
 
   // A photo carries no colour pipeline, so it is one overlay and one JPEG
-  // encode. The badge geometry comes from the same helper the video graph uses,
-  // which is what keeps the mark on the same visual line in both.
-  function exportPhoto(asset) {
+  // encode, with the camera's EXIF and capture time carried across.
+  async function exportPhoto(asset) {
     const output = targetPath(DEST, asset.original.name);
-    const parts = inkOverlayFilters({ inputIndex: 1, videoLabel: "[0:v]", scale: INK_WIDTH_RATIO, opacity: 1, centerYRatio: INK_CENTER_Y_RATIO, ink: inkBox, canvas: inkBox.canvas || null });
-    const chain = [parts.src, parts.sized, parts.composite].join(";") + ";[overlay]format=yuvj420p[out]";
-    // -q:v 1 is the encoder's best quality, and qmin/qmax have to be pinned too:
-    // without them the encoder clamps the requested scale and the flag alone
-    // gives 49.8 dB where the pinned form gives 51.2 dB.
-    execFileSync(FFMPEG, ["-y", "-v", "error", "-i", asset.original.path, "-i", badge.path, "-filter_complex", chain, "-map", "[out]", "-frames:v", "1", "-q:v", "1", "-qmin", "1", "-qmax", "1", output], { stdio: ["ignore", "pipe", "pipe"], timeout: 120000 });
-    let metadata = "no-exif";
-    try { metadata = copyJpegMetadata(asset.original.path, output) ? "exif-copied" : "no-exif"; }
-    catch (error) { metadata = "exif-copy-failed: " + String(error.message).split("\n")[0]; }
-    const size = fs.statSync(output).size;
-    return { output, size, detail: "photo-watermark " + metadata };
+    const result = await exportJpeg({
+      ffmpegPath: FFMPEG,
+      inputPath: asset.original.path,
+      outputPath: output,
+      watermarkPath: badge.path,
+      inkBox
+    });
+    return { output, size: result.bytes, detail: "photo-watermark " + (result.metadataCopied ? "exif-copied" : "no-exif") };
   }
 
   const queue = [...videos.map(a => ({ kind: "video", asset: a })), ...photos.map(a => ({ kind: "photo", asset: a }))];
@@ -206,7 +162,7 @@ function stopKeepAwake() { if (keepAwake) { try { keepAwake.kill(); } catch {} k
 
     const itemStarted = Date.now();
     try {
-      const result = item.kind === "video" ? await exportVideo(item.asset) : exportPhoto(item.asset);
+      const result = item.kind === "video" ? await exportVideo(item.asset) : await exportPhoto(item.asset);
       done[key] = result.output;
       saveJson(MANIFEST, done);
       completed++; bytes += result.size;

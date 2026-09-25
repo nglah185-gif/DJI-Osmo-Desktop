@@ -64,10 +64,6 @@ const SOFTWARE_ENCODER = "libx264";
 // paying for a full-frame conversion twice to reach the same result.
 const ENCODER_PIXEL_FORMAT = "yuv420p";
 
-function encoderPixelFormat() {
-  return ENCODER_PIXEL_FORMAT;
-}
-
 // Hardware candidates per platform, in preference order. Every entry has to
 // produce H.264 in MP4 so the output stays interchangeable with the software
 // path.
@@ -80,6 +76,29 @@ const HARDWARE_CANDIDATES = {
   darwin: ["h264_videotoolbox"],
   linux: ["h264_nvenc", "h264_qsv"]
 };
+
+// HEVC candidates, in the same preference order and for the same reason: the
+// vendor encoders expose real rate control and h264_mf/hevc_mf is the broadest
+// but least controllable fallback. HEVC is also the only codec here that can
+// encode 10-bit, which is what a D-Log M source actually needs.
+const HEVC_CANDIDATES = {
+  win32: ["hevc_nvenc", "hevc_qsv", "hevc_amf", "hevc_mf"],
+  darwin: ["hevc_videotoolbox"],
+  linux: ["hevc_nvenc", "hevc_qsv"]
+};
+
+// 10-bit pixel formats. NVENC consumes p010le directly; a software x265 encode
+// takes yuv420p10le. The graph ends in this format so no conversion is inserted
+// between the LUT and the encoder.
+const PIXEL_FORMAT_8BIT = "yuv420p";
+const PIXEL_FORMAT_10BIT = "p010le";
+const PIXEL_FORMAT_10BIT_SOFTWARE = "yuv420p10le";
+
+function encoderPixelFormat({ codec = "h264", tenBit = false } = {}) {
+  if (!tenBit) return PIXEL_FORMAT_8BIT;
+  return codec === "hevc" ? PIXEL_FORMAT_10BIT : PIXEL_FORMAT_10BIT_SOFTWARE;
+}
+
 
 // CRF 18 is the established software quality target. The hardware constant
 // quality scales are not the same scale as CRF, so these are mapped per encoder
@@ -95,7 +114,12 @@ const HARDWARE_QUALITY = {
   // against a quality-100 render of the same restored picture, 60 scored 45.4 dB
   // while 100 scored 52.0 dB, and the encode took the same time either way. This
   // is irreplaceable camera footage, so the scale sits at its maximum.
-  h264_mf: ["-rate_control", "quality", "-quality", "100"]
+  h264_mf: ["-rate_control", "quality", "-quality", "100"],
+  hevc_nvenc: ["-preset", "p4", "-cq", "21"],
+  hevc_qsv: ["-global_quality", "21"],
+  hevc_amf: ["-quality", "balanced", "-rc", "cqp", "-qp_i", "21", "-qp_p", "21"],
+  hevc_mf: ["-rate_control", "quality", "-quality", "100"],
+  hevc_videotoolbox: ["-q:v", "55"]
 };
 
 // x264 memory scales with (threads x frame size). Left unbounded a 4K export
@@ -104,11 +128,34 @@ const HARDWARE_QUALITY = {
 const THREAD_CAP_PIXEL_THRESHOLD = 3840 * 2160;
 const SOFTWARE_THREAD_CAP = 8;
 
+// Target-bitrate rate control, per encoder. Quality mode stays the default;
+// this only runs when the caller supplied an explicit bitrate, where "make the
+// file roughly this size" matters more than constant quality.
+function bitrateArgs(encoder, videoBitrate) {
+  const bps = Math.max(1000, Math.round(Number(videoBitrate)));
+  const maxrate = Math.round(bps * 1.5);
+  const bufsize = Math.round(bps * 2);
+  if (encoder === "h264_nvenc" || encoder === "hevc_nvenc") return ["-rc", "vbr", "-b:v", String(bps), "-maxrate", String(maxrate), "-bufsize", String(bufsize)];
+  if (encoder === "h264_qsv" || encoder === "hevc_qsv") return ["-b:v", String(bps), "-maxrate", String(maxrate), "-bufsize", String(bufsize)];
+  if (encoder === "h264_amf" || encoder === "hevc_amf") return ["-quality", "balanced", "-rc", "vbr_peak", "-b:v", String(bps), "-maxrate", String(maxrate), "-bufsize", String(bufsize)];
+  if (encoder === "h264_mf" || encoder === "hevc_mf") return ["-rate_control", "cbr", "-bitrate", String(bps)];
+  if (encoder === "h264_videotoolbox" || encoder === "hevc_videotoolbox") return ["-b:v", String(bps)];
+  return ["-b:v", String(bps), "-maxrate", String(maxrate), "-bufsize", String(bufsize)];
+}
+
 function softwareEncoderArgs(options = {}) {
-  const args = ["-c:v", SOFTWARE_ENCODER, "-preset", "medium", "-crf", "18"];
+  const codec = options.codec === "hevc" ? "libx265" : SOFTWARE_ENCODER;
+  const tenBit = options.tenBit === true && codec === "libx265";
+  const args = ["-c:v", codec, "-preset", "medium"];
+  if (options.videoBitrate) {
+    const bps = Math.max(1000, Math.round(Number(options.videoBitrate)));
+    args.push("-b:v", String(bps), "-maxrate", String(Math.round(bps * 1.5)), "-bufsize", String(Math.round(bps * 2)));
+  } else {
+    args.push("-crf", "18");
+  }
   const cap = softwareThreadCap(options.width, options.height);
   if (cap) args.push("-threads", String(cap));
-  args.push("-pix_fmt", ENCODER_PIXEL_FORMAT);
+  args.push("-pix_fmt", tenBit ? PIXEL_FORMAT_10BIT_SOFTWARE : ENCODER_PIXEL_FORMAT);
   return args;
 }
 
@@ -118,15 +165,16 @@ function softwareThreadCap(width, height) {
   return pixels >= THREAD_CAP_PIXEL_THRESHOLD ? SOFTWARE_THREAD_CAP : 0;
 }
 
-function hardwareEncoderArgs(encoder) {
-  const quality = HARDWARE_QUALITY[encoder];
-  if (!quality) throw new Error("Unknown hardware encoder: " + encoder);
-  return ["-c:v", encoder, ...quality, "-pix_fmt", ENCODER_PIXEL_FORMAT];
+function hardwareEncoderArgs(encoder, { tenBit = false, videoBitrate = null } = {}) {
+  const quality = videoBitrate ? bitrateArgs(encoder, videoBitrate) : HARDWARE_QUALITY[encoder];
+  if (!quality || !quality.length) throw new Error("Unknown hardware encoder: " + encoder);
+  const format = tenBit ? (String(encoder).startsWith("hevc") ? PIXEL_FORMAT_10BIT : PIXEL_FORMAT_10BIT_SOFTWARE) : ENCODER_PIXEL_FORMAT;
+  return ["-c:v", encoder, ...quality, "-pix_fmt", format];
 }
 
 function encoderArgs(encoder, options = {}) {
   if (!encoder || encoder === SOFTWARE_ENCODER) return softwareEncoderArgs(options);
-  return hardwareEncoderArgs(encoder);
+  return hardwareEncoderArgs(encoder, options);
 }
 
 // Hardware decode, as input options, and only where it was actually measured to
@@ -147,8 +195,9 @@ function hardwareDecodeArgs({ encoder = null, platform = process.platform } = {}
   return accel ? ["-hwaccel", accel] : [];
 }
 
-function hardwareCandidates(platform) {
-  return HARDWARE_CANDIDATES[platform] || [];
+function hardwareCandidates(platform, { codec = "h264" } = {}) {
+  const table = codec === "hevc" ? HEVC_CANDIDATES : HARDWARE_CANDIDATES;
+  return table[platform] || [];
 }
 
 // ffmpeg exiting non-zero is not by itself proof that the encoder is unusable:
@@ -185,14 +234,14 @@ function isHardwareEncoderFailure(stderr) {
 // what was compiled in, which on a Windows build includes NVENC on machines
 // with no NVIDIA GPU at all, so it would route every export to an encoder that
 // then fails at runtime.
-async function probeHardwareEncoder({ ffmpegPath, runFfmpeg, platform = process.platform, candidates = null } = {}) {
+async function probeHardwareEncoder({ ffmpegPath, runFfmpeg, platform = process.platform, candidates = null, codec = "h264", tenBit = false } = {}) {
   if (typeof runFfmpeg !== "function") throw new Error("probeHardwareEncoder requires a runFfmpeg function");
-  const list = candidates || hardwareCandidates(platform);
+  const list = candidates || hardwareCandidates(platform, { codec });
   for (const encoder of list) {
     const args = [
       "-y", "-v", "error",
       "-f", "lavfi", "-i", "color=c=black:s=256x256:r=25:d=0.2",
-      ...hardwareEncoderArgs(encoder),
+      ...hardwareEncoderArgs(encoder, { tenBit }),
       "-f", "null", "-"
     ];
     let result = null;
@@ -206,9 +255,11 @@ async function probeHardwareEncoder({ ffmpegPath, runFfmpeg, platform = process.
   return null;
 }
 
-// Probing spawns a process, so the result is cached per ffmpeg binary. Failures
-// are cached too: a machine without a usable GPU should pay the probe cost once
-// per session, not once per export.
+// Probing spawns a process, so the result is cached per ffmpeg binary and per
+// requested format. Failures are cached too: a machine without a usable GPU
+// should pay the probe cost once per session, not once per export. The cache is
+// keyed by codec and bit depth because a machine can have a working H.264
+// encoder and no 10-bit HEVC one (or the reverse).
 class EncoderSelector {
   constructor(options = {}) {
     this.ffmpegPath = options.ffmpegPath || "ffmpeg";
@@ -216,8 +267,8 @@ class EncoderSelector {
     this.platform = options.platform || process.platform;
     this.preferHardware = options.preferHardware !== false;
     this.candidates = options.candidates || null;
-    this._pending = null;
-    this._resolved = undefined;
+    this._pending = new Map();
+    this._resolved = new Map();
     this._disabled = false;
   }
 
@@ -227,38 +278,45 @@ class EncoderSelector {
   // and fail again.
   disableHardware() {
     this._disabled = true;
-    this._resolved = null;
-    this._pending = null;
+    this._resolved.clear();
+    this._pending.clear();
   }
 
-  async select() {
+  async select({ codec = "h264", tenBit = false } = {}) {
     if (this._disabled || !this.preferHardware) return null;
-    if (this._resolved !== undefined) return this._resolved;
-    if (!this._pending) {
-      this._pending = probeHardwareEncoder({
+    const key = (codec === "hevc" ? "hevc" : "h264") + (tenBit ? ":10" : ":8");
+    if (this._resolved.has(key)) return this._resolved.get(key);
+    if (!this._pending.has(key)) {
+      const pending = probeHardwareEncoder({
         ffmpegPath: this.ffmpegPath,
         runFfmpeg: this.runFfmpeg,
         platform: this.platform,
-        candidates: this.candidates
+        candidates: this.candidates,
+        codec,
+        tenBit
       }).then(encoder => {
-        this._resolved = encoder;
-        this._pending = null;
+        this._resolved.set(key, encoder);
+        this._pending.delete(key);
         return encoder;
       }).catch(() => {
-        this._resolved = null;
-        this._pending = null;
+        this._resolved.set(key, null);
+        this._pending.delete(key);
         return null;
       });
+      this._pending.set(key, pending);
     }
-    return this._pending;
+    return this._pending.get(key);
   }
 }
 
 module.exports = {
   SOFTWARE_ENCODER,
   ENCODER_PIXEL_FORMAT,
+  PIXEL_FORMAT_10BIT,
+  PIXEL_FORMAT_10BIT_SOFTWARE,
   encoderPixelFormat,
   HARDWARE_CANDIDATES,
+  HEVC_CANDIDATES,
   HARDWARE_QUALITY,
   HARDWARE_DECODE,
   hardwareDecodeArgs,

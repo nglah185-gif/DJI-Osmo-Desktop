@@ -103,6 +103,34 @@
     return !!assetId && Array.isArray(assets) && assets.some(asset => asset && asset.id === assetId);
   }
 
+  // Everything in view that the batch can take: clips take the colour pipeline
+  // and photos take the still path, so both are exportable and "select all"
+  // means all of them. Anything without an id cannot be keyed in the selection.
+  function selectableAssetIds(assets) {
+    return (Array.isArray(assets) ? assets : [])
+      .filter(asset => asset && asset.id)
+      .map(asset => asset.id);
+  }
+
+  // One control covers both directions. `allSelected` is what the button label
+  // reads from, and it is only true when there is something to select -- an
+  // empty view must not claim everything is chosen.
+  function selectAllState(assets, selectedIds) {
+    const selectable = selectableAssetIds(assets);
+    const selected = selectedIds instanceof Set ? selectedIds : new Set(Array.isArray(selectedIds) ? selectedIds : []);
+    const allSelected = selectable.length > 0 && selectable.every(id => selected.has(id));
+    return { selectable, allSelected, enabled: selectable.length > 0 };
+  }
+
+  // Mutates the caller's set and returns it, so the renderer can keep using its
+  // single selection set as the one source of truth.
+  function toggleSelectAll(assets, selectedIds) {
+    const selected = selectedIds instanceof Set ? selectedIds : new Set(Array.isArray(selectedIds) ? selectedIds : []);
+    const { selectable, allSelected } = selectAllState(assets, selected);
+    for (const id of selectable) { if (allSelected) selected.delete(id); else selected.add(id); }
+    return selected;
+  }
+
   function navigationState(assets, assetId) {
     const index = Array.isArray(assets) ? assets.findIndex(asset => asset && asset.id === assetId) : -1;
     return { previousDisabled: index <= 0, nextDisabled: index < 0 || index >= assets.length - 1 };
@@ -138,7 +166,7 @@
     return /(?:^|:\s*)Export canceled\s*$/.test(String(error && error.message || error || ""));
   }
 
-  const api = { numberOrDefault, watermarkFromControls, createSerialRunner, createLatestRunner, switchMode, snapshotItems, secondsFromMicroseconds, microsecondsFromSeconds, technicalForColorProfile, colorProfileForTechnical, playbackStartTime, previewTimelineSeconds, exportDurationSeconds, trimPlaybackState, displayResolution, selectionInAssets, navigationState, assetControlState, emptyStateFor, shouldRenderExportFacts, isExportCanceledError, shouldResetSelectionOnSourceChange };
+  const api = { numberOrDefault, watermarkFromControls, createSerialRunner, createLatestRunner, switchMode, snapshotItems, secondsFromMicroseconds, microsecondsFromSeconds, technicalForColorProfile, colorProfileForTechnical, playbackStartTime, previewTimelineSeconds, exportDurationSeconds, trimPlaybackState, displayResolution, selectionInAssets, selectableAssetIds, selectAllState, toggleSelectAll, navigationState, assetControlState, emptyStateFor, shouldRenderExportFacts, isExportCanceledError, shouldResetSelectionOnSourceChange };
   if (typeof window !== "undefined") window.__editorUiState = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;
 })();

@@ -63,8 +63,15 @@
 
   /* Segoe UI Variable is the Windows 11 UI face and is a genuine step up from
      plain Segoe UI at these sizes; the fallbacks keep the older ones usable. */
-  --font-ui: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  --font-ui: "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", "PingFang SC", system-ui, sans-serif;
   --font-mono: "Cascadia Mono", "Cascadia Code", Consolas, monospace;
+
+  /* The lit surface: artwork sits on this and nothing else does. A shallow top
+     highlight sells it as glass in a dark room. */
+  --glass: linear-gradient(180deg, #1c2025 0%, #131619 100%);
+  --glass-lit: inset 0 1px 0 rgba(255, 255, 255, .05);
+  --dur: 160ms;
+  --ease: cubic-bezier(.22, .61, .36, 1);
 
   --shadow-1: 0 1px 2px rgba(0, 0, 0, .45);
   --shadow-2: 0 14px 40px rgba(0, 0, 0, .55);
@@ -163,6 +170,11 @@ button { cursor: pointer; }
 .view-toggle button:hover { color: var(--text); }
 .view-toggle button.active { background: var(--raise-hover); border-color: var(--line-strong); color: var(--accent); }
 .view-toggle .icon { width: 15px; height: 15px; }
+/* Bulk selection sits beside the view switch: it acts on the list as a whole,
+   so it belongs with the controls that decide what the list shows. */
+.select-all-button { height: 26px; padding: 0 10px; border: 1px solid var(--line-strong); border-radius: var(--radius); background: var(--raise); color: var(--text); font-size: 11.5px; white-space: nowrap; flex: 0 0 auto; }
+.select-all-button:hover { border-color: var(--accent-line); }
+.select-all-button:disabled { opacity: .45; cursor: default; }
 
 .source-switch { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1); padding: var(--space-2) var(--space-3); border-bottom: 1px solid var(--line); color: var(--text-faint); font-size: 10.5px; }
 .source-switch button { height: 26px; padding: 0 10px; border: 1px solid transparent; border-radius: var(--radius); background: transparent; color: var(--text-muted); font-size: 11.5px; white-space: nowrap; flex: 0 0 auto; }
@@ -214,8 +226,25 @@ body.view-poster .media-card { flex-direction: column; gap: 6px; width: 248px; h
 /* contain rather than cover: this camera shoots both landscape and portrait, and
    a cover crop turns a portrait frame into a horizontal slice of itself, which
    defeats the point of browsing by picture. */
-body.view-poster .thumb { flex: 0 0 130px; width: 100%; height: 130px; }
+body.view-poster .thumb { flex: 1 1 auto; width: 100%; height: 130px; }
 body.view-poster .thumb img { object-fit: contain; }
+/* The poster grid is a contact sheet, so every frame sits in the same cell.
+   A landscape frame fills its cell; a portrait one cannot, and smearing a
+   blurred copy of it behind the letterbox read as a rendering fault -- the
+   doubled vertical streaks were the tell. So the cell mats the frame the way a
+   print is matted in a mount:
+
+     - the mat is a shallow well one step above the card. Plain black sat below
+       the window background and read as a hole rather than a surface;
+     - the hairline hugs the IMAGE, not the cell. That needs the element sized by
+       its intrinsic ratio, which in turn needs it out of flow: as a static grid
+       item its natural height inflated the row and the cell clipped the frame. */
+body.view-poster .thumb { background: linear-gradient(180deg, var(--bg), var(--surface)); }
+body.view-poster .thumb img {
+  position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+  width: auto; height: auto; max-width: 100%; max-height: 100%; object-fit: contain;
+  border: 1px solid var(--line); border-radius: var(--radius-sm); box-shadow: 0 2px 10px rgba(0, 0, 0, .5);
+}
 body.view-poster .card-main { gap: 3px; justify-content: flex-start; }
 body.view-poster .card-meta { gap: 8px; }
 body.view-poster .card-name { font-size: 11.5px; }
@@ -392,19 +421,24 @@ body:not(.has-clip) .preview-panel { display: none; }
    then adjustments, then the watermark overlay. Reading the order off the panel
    is how the user knows which control to set first. */
 .accordion { display: flex; flex-direction: column; counter-reset: stage; }
-.acc-item { counter-increment: stage; border-bottom: 1px solid var(--line); }
-.acc-head { display: flex; align-items: center; gap: var(--space-2); margin: 0; padding: 11px 2px; cursor: pointer; color: var(--text); font-size: 12.5px; font-weight: 600; user-select: none; }
-.acc-head::before { content: counter(stage); flex: 0 0 auto; width: 18px; height: 18px; display: grid; place-items: center; border: 1px solid var(--line-strong); border-radius: 50%; color: var(--text-faint); font-family: var(--font-mono); font-size: 9.5px; font-weight: 400; }
-.acc-item.open .acc-head::before { color: var(--accent); border-color: var(--accent-line); }
+.acc-item { counter-increment: stage; border-bottom: 1px solid var(--line); transition: background var(--dur) var(--ease); }
+.acc-head { display: flex; align-items: center; gap: var(--space-2); margin: 0; padding: 11px 2px; cursor: pointer; color: var(--text-muted); font-size: 12.5px; font-weight: 600; user-select: none; transition: color var(--dur) var(--ease); }
+.acc-head:hover { color: var(--text); }
+.acc-item.open .acc-head { color: var(--text); }
+.acc-head::before { content: counter(stage); flex: 0 0 auto; width: 18px; height: 18px; display: grid; place-items: center; border: 1px solid var(--line-strong); border-radius: 50%; color: var(--text-faint); font-family: var(--font-mono); font-size: 9.5px; font-weight: 400; transition: color var(--dur) var(--ease), border-color var(--dur) var(--ease), background var(--dur) var(--ease); }
+.acc-item.open .acc-head::before { color: var(--accent); border-color: var(--accent-line); background: var(--accent-dim); }
 .acc-head span:first-of-type { flex: 1 1 auto; }
-.chevron { color: var(--text-faint); transition: transform .18s ease; }
+.chevron { color: var(--text-faint); transition: transform .22s var(--ease), color var(--dur) var(--ease); }
+.acc-head:hover .chevron { color: var(--text-muted); }
 .acc-item.open .chevron { transform: rotate(180deg); }
 .acc-body { display: none; padding: 2px 2px var(--space-3); }
-.acc-item.open .acc-body { display: block; }
+.acc-item.open .acc-body { display: block; animation: acc-body var(--dur) var(--ease) both; }
+@keyframes acc-body { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; transform: none; } }
 .acc-field { margin-bottom: var(--space-3); }
 .acc-field label { display: block; color: var(--text-muted); font-size: 11px; margin-bottom: 5px; }
-.acc-field select, .acc-field input[type=number] { width: 100%; height: var(--control-height); background: var(--raise); color: var(--text); border: 1px solid var(--line-strong); border-radius: var(--radius); padding: 0 8px; font-size: 11.5px; }
+.acc-field select, .acc-field input[type=number] { width: 100%; height: var(--control-height); background: var(--raise); color: var(--text); border: 1px solid var(--line-strong); border-radius: var(--radius); padding: 0 8px; font-size: 11.5px; transition: border-color var(--dur) var(--ease), background var(--dur) var(--ease); }
 .acc-field select:hover, .acc-field input:hover { border-color: var(--accent-line); }
+.acc-field select:focus-visible, .acc-field input:focus-visible, .acc-head:focus-visible { outline: none; border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-dim); }
 .acc-field input[type=range] { width: 100%; height: 20px; accent-color: var(--accent); background: transparent; cursor: pointer; }
 .acc-field input[type=checkbox] { accent-color: var(--accent); width: 14px; height: 14px; }
 .watermark-placement { margin: 0 0 var(--space-3); color: var(--text-faint); font-size: 11px; }
@@ -510,11 +544,236 @@ body:not(.has-clip) .preview-panel { display: none; }
 label.batch-option { cursor: pointer; }
 .batch-option input[type="checkbox"] { accent-color: var(--accent); }
 .batch-option-body { display: grid; gap: 1px; }
-.batch-option-name { color: var(--text); }
+/* The label sits in a flex row that also carries a select and a long hint, so it
+   must keep its own width instead of breaking between two ideographs. */
+.batch-option-name { color: var(--text); white-space: nowrap; }
 .batch-option-hint { color: var(--text-faint); font-size: 10.5px; }
 .batch-option-main { display: flex; align-items: center; gap: var(--space-2); cursor: pointer; }
 .batch-option select { margin-left: auto; height: var(--control-height); max-width: 240px; padding: 0 8px; background: var(--surface); color: var(--text); border: 1px solid var(--line-strong); border-radius: var(--radius); font-size: 11.5px; }
 .batch-option select:disabled { opacity: .5; }
+
+/* ---- Badge picker ---- */
+/* Badges are white-on-transparent artwork, so they only read on a lit surface.
+   The subject of this control is the badge itself: the button is a slab of glass
+   holding the current one, and the menu is a sheet of the same slabs so a badge
+   can be recognised by eye instead of decoded from its name. */
+.badge-field { position: relative; min-width: 0; }
+.badge-picker { position: relative; display: block; width: 100%; padding: 12px 12px 9px; background: var(--glass); color: var(--text); border: 1px solid var(--line-strong); border-radius: var(--radius-lg); text-align: left; box-shadow: var(--glass-lit); transition: border-color var(--dur) var(--ease), transform var(--dur) var(--ease), box-shadow var(--dur) var(--ease); }
+.badge-picker:hover { border-color: var(--accent-line); transform: translateY(-1px); box-shadow: var(--glass-lit), 0 8px 20px rgba(0, 0, 0, .38); }
+.badge-picker:focus-visible { outline: none; border-color: var(--accent); box-shadow: var(--glass-lit), 0 0 0 2px var(--accent-dim); }
+.badge-preview { display: block; width: 100%; height: 56px; object-fit: contain; }
+.badge-preview[hidden] { display: block; visibility: hidden; }
+.badge-picker .badge-preview { margin-bottom: 7px; }
+.badge-picker-name { display: block; padding-right: 16px; color: var(--text-muted); font-size: 10.5px; letter-spacing: .2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; transition: color var(--dur) var(--ease); }
+.badge-picker:hover .badge-picker-name { color: var(--text); }
+.badge-chevron { position: absolute; top: 9px; right: 9px; width: 13px; height: 13px; color: var(--text-faint); transition: transform .22s var(--ease), color var(--dur) var(--ease); }
+.badge-picker:hover .badge-chevron { color: var(--text-muted); }
+.badge-picker[aria-expanded="true"] .badge-chevron { transform: rotate(180deg); }
+.badge-menu { position: absolute; z-index: 30; top: calc(100% + 6px); left: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 6px; width: 100%; min-width: 280px; max-width: min(438px, 100%); max-height: 58vh; overflow: auto; overscroll-behavior: contain; padding: 8px; background: var(--overlay); border: 1px solid var(--line-strong); border-radius: var(--radius-lg); box-shadow: var(--shadow-2); animation: badge-sheet var(--dur) var(--ease) both; }
+.badge-menu[hidden] { display: none !important; }
+@keyframes badge-sheet { from { opacity: 0; transform: translateY(-5px); } to { opacity: 1; transform: none; } }
+/* A device band, stuck to the top of the sheet while its badges scroll past. */
+.badge-group { grid-column: 1 / -1; position: sticky; top: -8px; z-index: 1; display: flex; align-items: center; gap: 8px; margin-top: 2px; padding: 8px 6px 5px; background: linear-gradient(180deg, var(--overlay) 74%, rgba(28, 32, 35, 0)); color: var(--text-faint); font-family: var(--font-mono); font-size: 9.5px; letter-spacing: .6px; }
+.badge-group::after { content: ""; flex: 1 1 auto; height: 1px; background: var(--line); }
+.badge-row { display: grid; grid-template-rows: 48px auto; gap: 5px; padding: 9px 7px 7px; background: var(--glass); border: 1px solid var(--line); border-radius: var(--radius); color: var(--text); text-align: center; box-shadow: var(--glass-lit); transition: border-color var(--dur) var(--ease), transform var(--dur) var(--ease), box-shadow var(--dur) var(--ease); }
+/* The tiles settle in only when the sheet opens; a refresh while it is already
+   open must not make the whole sheet flicker. */
+.badge-menu.settle .badge-row { animation: badge-tile 220ms var(--ease) both; animation-delay: calc(var(--i, 0) * 14ms); }
+@keyframes badge-tile { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+.badge-row:hover { border-color: var(--line-strong); transform: translateY(-1px); box-shadow: var(--glass-lit), 0 5px 14px rgba(0, 0, 0, .35); }
+.badge-row:focus-visible { outline: none; border-color: var(--accent); box-shadow: var(--glass-lit), 0 0 0 2px var(--accent-dim); }
+.badge-row img { width: 100%; height: 100%; object-fit: contain; transition: transform var(--dur) var(--ease); }
+.badge-row:hover img { transform: scale(1.05); }
+.badge-row.active { border-color: var(--accent); background: var(--accent-dim), var(--glass); }
+.badge-row.active .badge-row-name { color: var(--text); }
+.badge-row-name { color: var(--text-muted); font-size: 10px; letter-spacing: .2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.badge-row[data-id="none"] { grid-column: 1 / -1; grid-template-rows: 30px; align-items: center; }
+.badge-row[data-id="none"] .badge-row-name { font-size: 11px; }
+/* In the batch sheet the control shares a row, so the slab shrinks and the
+   sheet opens towards the panel instead of off its edge. */
+.batch-option .badge-field { width: 186px; margin-left: auto; }
+.batch-option .badge-picker { padding: 8px 9px 7px; }
+.batch-option .badge-picker .badge-preview { height: 30px; margin-bottom: 4px; }
+.batch-option .badge-menu { left: auto; right: 0; width: 320px; min-width: 0; }
+@media (prefers-reduced-motion: reduce) {
+  .badge-menu, .badge-row, .acc-item.open .acc-body { animation: none; }
+  .badge-picker, .badge-row, .badge-row img, .acc-head, .acc-head::before, .chevron { transition: none; }
+}
+
+/* ===========================================================================
+   The room: three depths, one accent, and type that reads like instrument
+   lettering. The picture sits on the darkest surface so it glows; the side
+   rails are a step above it; glass is spent only on content -- thumbnails,
+   badges, readouts. Nothing else gets a border it did not earn.
+   =========================================================================== */
+
+:root {
+  --rail: #0e1012;
+  --stage: #07080a;
+  --line-soft: #1b1e21;
+  --radius: 6px;
+  --radius-lg: 10px;
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, .4);
+}
+
+/* ---- The instrument bar ------------------------------------------------ */
+.topbar { height: 52px; padding: 0 14px; background: var(--rail); border-bottom: 1px solid var(--line); }
+.brand-mark { filter: saturate(0) brightness(1.6); }
+.brand-name { font-size: 12.5px; font-weight: 600; letter-spacing: .2px; }
+.app-nav { color: var(--text-muted); font-size: 11.5px; }
+.nav-title { color: var(--text-muted); }
+.device-title { color: var(--text); font-family: var(--font-mono); font-size: 11px; letter-spacing: .4px; }
+.icon-button { width: 30px; height: 30px; border: 1px solid transparent; border-radius: var(--radius); color: var(--text-muted); background: transparent; transition: color var(--dur) var(--ease), background var(--dur) var(--ease), border-color var(--dur) var(--ease); }
+.icon-button:hover { color: var(--text); background: var(--raise); border-color: var(--line); }
+.icon-button:focus-visible { outline: none; border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-dim); }
+
+/* ---- Rails ------------------------------------------------------------- */
+.library-panel, .inspector-panel { background: var(--rail); }
+.library-panel { border-right: 1px solid var(--line); }
+.inspector-panel { border-left: 1px solid var(--line); padding: var(--space-3) var(--space-4); }
+.panel-heading { padding: var(--space-4) var(--space-4) var(--space-2); }
+.panel-heading h1, .panel-block-title { font-size: 13px; font-weight: 650; letter-spacing: .2px; }
+
+/* ---- The stage --------------------------------------------------------- */
+.preview-panel, .video-shell { background: var(--stage); }
+.video-empty { color: var(--text-faint); }
+.video-empty-icon { opacity: .5; }
+.player-controls { gap: 6px; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--rail); box-shadow: var(--shadow-1); }
+.play-button { color: var(--text); transition: color var(--dur) var(--ease), transform var(--dur) var(--ease); }
+.play-button:hover { color: var(--accent); transform: scale(1.04); }
+.timecode { font-family: var(--font-mono); font-size: 11px; letter-spacing: .3px; color: var(--text); }
+.seek-track { background: var(--line-strong); }
+.seek-fill { background: var(--accent); transition: width var(--dur) linear; }
+.mode-toggle { border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
+.mode-button { height: 26px; padding: 0 10px; color: var(--text-muted); background: transparent; font-size: 11px; transition: color var(--dur) var(--ease), background var(--dur) var(--ease); }
+.mode-button:hover { color: var(--text); background: var(--raise); }
+.mode-button.active { color: var(--accent-ink); background: var(--accent); }
+.fit-select, .proxy-label { height: 26px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--rail); color: var(--text-muted); font-size: 11px; }
+.preview-state { color: var(--text-faint); font-size: 10.5px; }
+
+/* ---- Library ----------------------------------------------------------- */
+/* Every thumbnail gets the same slot, so a portrait photo and a wide clip read
+   as equals on the shelf; the artwork is contained, never cropped. */
+.media-card img { flex: 0 0 auto; width: 104px; height: 64px; object-fit: contain; border-radius: 5px; background: var(--stage); box-shadow: var(--glass-lit); }
+.media-card { border: 1px solid var(--line-soft); border-radius: var(--radius); background: var(--rail); transition: border-color var(--dur) var(--ease), background var(--dur) var(--ease), transform var(--dur) var(--ease); }
+.media-card:hover { border-color: var(--line-strong); background: var(--raise); transform: translateY(-1px); }
+.media-card.selected { border-color: var(--accent-line); background: linear-gradient(90deg, var(--accent-dim), transparent 60%), var(--raise); }
+.media-card.selected::before { content: ""; position: absolute; left: 0; top: 8px; bottom: 8px; width: 2px; border-radius: 0 2px 2px 0; background: var(--accent); }
+.media-card.picked { border-color: var(--accent-line); }
+.badge { border-color: var(--line); background: rgba(255, 255, 255, .04); color: var(--text-faint); font-family: var(--font-mono); font-size: 9px; letter-spacing: .4px; }
+.filter-tab, .view-toggle, .select-all-button, .rescan-button, .compact-action { height: 28px; border: 1px solid var(--line); border-radius: var(--radius); background: transparent; color: var(--text-muted); font-size: 11px; transition: color var(--dur) var(--ease), border-color var(--dur) var(--ease), background var(--dur) var(--ease); }
+.filter-tab:hover, .view-toggle:hover, .select-all-button:hover, .rescan-button:hover, .compact-action:hover { color: var(--text); border-color: var(--line-strong); background: var(--raise); }
+.filter-tab.active, .view-toggle.active { color: var(--text); border-color: var(--accent-line); background: var(--accent-dim); }
+.sort-select, .fit-select { background: var(--rail); color: var(--text); border: 1px solid var(--line); border-radius: var(--radius); height: 28px; font-size: 11.5px; }
+/* The filter row is a bar: it stays above the grid and gives the sort control
+   its own line instead of letting it sit on top of the first card. */
+.library-filter { position: relative; z-index: 2; min-height: 36px; padding-bottom: var(--space-2); background: var(--rail); }
+.sort-select { flex: 0 0 auto; margin-left: auto; }
+.sort-select select { height: 26px; }
+.selection-bar { border: 1px solid var(--accent-line); border-radius: var(--radius); background: var(--accent-dim); color: var(--text); }
+.selection-count { font-family: var(--font-mono); }
+.scan-status, .block-hint, .block-label { color: var(--text-faint); font-size: 10.5px; }
+.block-value { font-family: var(--font-mono); font-size: 11px; color: var(--text); }
+
+/* ---- Timeline ---------------------------------------------------------- */
+.timeline-dock { background: var(--rail); border-top: 1px solid var(--line); }
+.timeline-dock-title, .timeline-dock-head { color: var(--text-muted); font-size: 11px; }
+.timeline-meta, .timeline-zoom-value { font-family: var(--font-mono); font-size: 10.5px; color: var(--text-faint); }
+.timeline-track, .mini-timeline { background: var(--stage); border: 1px solid var(--line); border-radius: var(--radius); }
+.timeline-thumbnails { opacity: .92; }
+.timeline-clip { border: 1px solid var(--accent-line); border-radius: 4px; }
+.playhead { background: var(--accent); box-shadow: 0 0 0 1px rgba(0, 0, 0, .5), 0 0 10px var(--accent-dim); }
+.trim-handle { background: var(--accent); border-radius: 2px; }
+.timeline-trim-dim { background: rgba(0, 0, 0, .55); }
+.timeline-trim-hint, .timeline-ruler { color: var(--text-faint); font-size: 10px; }
+.zoom-badge { font-family: var(--font-mono); font-size: 9.5px; border: 1px solid var(--line); border-radius: 3px; }
+
+/* ---- Controls, everywhere --------------------------------------------- */
+select, input[type=number], input[type=text] { background: var(--raise); color: var(--text); border: 1px solid var(--line); border-radius: var(--radius); transition: border-color var(--dur) var(--ease), background var(--dur) var(--ease); }
+select:hover, input[type=number]:hover, input[type=text]:hover { border-color: var(--line-strong); background: var(--raise-hover); }
+select:focus-visible, input:focus-visible { outline: none; border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-dim); }
+input[type=range] { accent-color: var(--accent); }
+input[type=checkbox] { accent-color: var(--accent); }
+label { color: var(--text-muted); }
+
+/* ---- Actions ----------------------------------------------------------- */
+.export-button { height: 38px; border-radius: var(--radius-lg); background: var(--accent); color: var(--accent-ink); font-size: 12.5px; font-weight: 650; letter-spacing: .3px; box-shadow: var(--glass-lit); transition: background var(--dur) var(--ease), transform var(--dur) var(--ease), box-shadow var(--dur) var(--ease); }
+.export-button:hover { background: var(--accent-hover); transform: translateY(-1px); box-shadow: var(--glass-lit), 0 6px 18px rgba(76, 141, 255, .25); }
+.export-button:active { transform: none; }
+.export-button.secondary { background: var(--glass); border: 1px solid var(--line-strong); color: var(--text); font-weight: 500; }
+.export-button.secondary:hover { border-color: var(--accent-line); box-shadow: var(--glass-lit); }
+.export-facts { border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--glass); box-shadow: var(--glass-lit); padding: 2px 12px; }
+.export-facts div { border-bottom: 1px solid var(--line-soft); font-size: 11px; }
+.export-facts div:last-child { border-bottom: 0; }
+.export-status { color: var(--text-muted); font-size: 10.5px; }
+.progress-track { background: var(--line-strong); border-radius: 999px; }
+.progress-fill { background: var(--accent); }
+
+/* ---- Sheets ------------------------------------------------------------ */
+.batch-dialog, .export-dialog, .settings-dialog, .source-dialog { background: var(--overlay); border: 1px solid var(--line-strong); border-radius: 14px; box-shadow: 0 24px 60px rgba(0, 0, 0, .6), var(--glass-lit); }
+.settings-overlay { background: rgba(4, 5, 6, .66); backdrop-filter: blur(2px); }
+.settings-row, .batch-option { border-bottom: 1px solid var(--line-soft); }
+.batch-option:hover { background: var(--raise); }
+.export-modal-name, .batch-option-name { color: var(--text); }
+.export-modal-label, .export-modal-value { font-family: var(--font-mono); font-size: 10.5px; }
+.error-banner { border: 1px solid rgba(255, 112, 112, .4); border-radius: var(--radius); background: rgba(255, 112, 112, .12); color: #ffb4b4; }
+
+/* ---- Scrollbars -------------------------------------------------------- */
+* { scrollbar-width: thin; scrollbar-color: #2b3035 transparent; }
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #24282c; border: 3px solid transparent; background-clip: content-box; border-radius: 999px; }
+::-webkit-scrollbar-thumb:hover { background: #333a40; background-clip: content-box; }
+::selection { background: var(--accent-dim); }
+
+/* ---- Timeline trim: a bracketed range ---------------------------------
+   The kept part of the clip is framed as [=====]; the trimmed ends read as
+   hatched paper behind it, so a drag shows the cut growing or shrinking. */
+.timeline-dock .timeline-track { height: 54px; }
+.timeline-dock .timeline-clip { top: 2px; bottom: 2px; background: linear-gradient(180deg, var(--accent-dim), rgba(76, 141, 255, .05)); border: 1px solid var(--accent); border-radius: 3px; box-shadow: inset 0 0 0 1px rgba(76, 141, 255, .22), 0 0 20px rgba(76, 141, 255, .14); }
+.timeline-clip::before, .timeline-clip::after { content: ""; position: absolute; top: -3px; bottom: -3px; width: 3px; border-radius: 2px; background: var(--accent); }
+.timeline-clip::before { left: -4px; }
+.timeline-clip::after { right: -4px; }
+.timeline-trim-dim { background: repeating-linear-gradient(135deg, rgba(6, 7, 8, .82) 0 6px, rgba(6, 7, 8, .58) 6px 12px); }
+.timeline-trim-dim-left { border-right: 1px dashed rgba(255, 255, 255, .28); }
+.timeline-trim-dim-right { border-left: 1px dashed rgba(255, 255, 255, .28); }
+.timeline-dock .trim-handle { top: 1px; bottom: 1px; width: 16px; background: linear-gradient(180deg, var(--accent-hover), var(--accent)); border-radius: 5px; box-shadow: 0 0 0 1px rgba(0, 0, 0, .55), 0 0 14px rgba(76, 141, 255, .4); }
+.timeline-dock .trim-handle::after { content: ""; position: absolute; top: 8px; bottom: 8px; left: 50%; width: 2px; transform: translateX(-50%); border-left: 1px solid rgba(255, 255, 255, .55); border-right: 1px solid rgba(255, 255, 255, .55); }
+.timeline-dock .trim-handle:hover { background: var(--accent-hover); }
+.timeline-dock .playhead { width: 2px; background: var(--text); box-shadow: 0 0 0 1px rgba(0, 0, 0, .6); }
+.timeline-trim-hint { color: var(--text-muted); font-size: 10.5px; }
+
+/* ---- Progress bars, after OpenCut -------------------------------------
+   A slim rounded track, a fill that keeps a linear transition so it never
+   lags the number beside it, and a square-cornered white grip that only shows
+   up when you reach for the bar. */
+.seek-track, .export-progress, .progress-track { height: 4px; border-radius: 999px; overflow: hidden; background: var(--line-strong); }
+.seek-fill, .export-progress-fill, .progress-fill { position: relative; height: 100%; border-radius: inherit; background: var(--accent); transition: width .2s linear; }
+.seek-track { overflow: visible; }
+.seek-fill::after { content: ""; position: absolute; top: 50%; right: -6px; width: 12px; height: 12px; transform: translateY(-50%); border: 1px solid var(--accent-line); border-radius: 4px; background: #fff; opacity: 0; transition: opacity var(--dur) var(--ease), box-shadow var(--dur) var(--ease); pointer-events: none; }
+.seek-track:hover .seek-fill::after, .seek-track:focus-within .seek-fill::after, .seek-track.dragging .seek-fill::after { opacity: 1; }
+.seek-track:hover .seek-fill::after, .seek-track.dragging .seek-fill::after { box-shadow: 0 0 0 5px var(--accent-dim); }
+.export-modal-pct, .progress-label, .export-modal-value, .timeline-meta { font-variant-numeric: tabular-nums; }
+
+@media (prefers-reduced-motion: reduce) {
+  .media-card, .export-button, .icon-button, .filter-tab, .view-toggle, .mode-button, .seek-fill, select, input { transition: none; }
+}
+
+/* ---- Rail widths -------------------------------------------------------
+   Both side rails are resizable: drag the seam, double-click it to go back to
+   the shipped width, or focus it and use the arrow keys. The width lives in a
+   custom property so the grid and the seam can never disagree. */
+.workspace { position: relative; grid-template-columns: var(--nav-w, 344px) minmax(360px, 1fr) var(--insp-w, 312px); }
+body:not(.has-clip) .workspace { grid-template-columns: minmax(0, 1fr) var(--insp-w, 312px); }
+.rail-splitter { position: absolute; top: 0; bottom: 0; z-index: 6; width: 11px; cursor: col-resize; touch-action: none; }
+.rail-splitter.nav { left: calc(var(--nav-w, 344px) - 5px); }
+.rail-splitter.insp { right: calc(var(--insp-w, 312px) - 5px); }
+.rail-splitter::before { content: ""; position: absolute; top: 0; bottom: 0; left: 4px; width: 3px; border-radius: 2px; background: transparent; transition: background var(--dur) var(--ease); }
+.rail-splitter:hover::before, .rail-splitter.dragging::before { background: var(--accent-line); }
+.rail-splitter:focus-visible { outline: none; }
+.rail-splitter:focus-visible::before { background: var(--accent); }
+body:not(.has-clip) .rail-splitter.nav { display: none; }
+@media (prefers-reduced-motion: reduce) { .rail-splitter::before { transition: none; } }
 .batch-pick-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: var(--space-3); padding: 8px var(--space-3); font-size: 11.5px; border-bottom: 1px solid var(--line); }
 .batch-pick-row:last-child { border-bottom: 0; }
 .batch-pick-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -523,3 +782,15 @@ label.batch-option { cursor: pointer; }
    sets an exact rotate+scale inline from the shell box, so this only needs to
    keep the origin centred. */
 .video-shell video.rotated-apply { transform-origin: center; }
+
+/* Video specification controls (resolution / frame rate / rate / 10-bit).
+   The option row keeps its label above a compact grid so five controls fit the
+   batch dialog without pushing the clip list off screen. */
+.video-spec-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(132px, 1fr)); gap: var(--space-2); margin-top: var(--space-2); }
+.video-spec-field { display: flex; flex-direction: column; gap: 4px; min-width: 0; color: var(--text-faint); font-size: 10.5px; }
+.video-spec-field select, .video-spec-field input { width: 100%; min-width: 0; height: var(--control-height); padding: 0 8px; }
+.video-spec-check { flex-direction: row; align-items: center; gap: 6px; color: var(--text); font-size: 12px; }
+.video-spec-check input[type="checkbox"] { accent-color: var(--accent); width: auto; height: auto; }
+.video-spec-bitrate { display: flex; align-items: center; gap: 4px; }
+.video-spec-bitrate input { flex: 1; }
+.video-spec-bitrate span { color: var(--text-faint); white-space: nowrap; }

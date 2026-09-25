@@ -1,6 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { numberOrDefault, watermarkFromControls, createSerialRunner, createLatestRunner, switchMode, snapshotItems, secondsFromMicroseconds, microsecondsFromSeconds, technicalForColorProfile, colorProfileForTechnical, playbackStartTime, previewTimelineSeconds, exportDurationSeconds, trimPlaybackState, displayResolution, selectionInAssets, navigationState, assetControlState, emptyStateFor, shouldRenderExportFacts, isExportCanceledError, shouldResetSelectionOnSourceChange } = require("../src/renderer/editor-ui-state");
+const { numberOrDefault, watermarkFromControls, createSerialRunner, createLatestRunner, switchMode, snapshotItems, secondsFromMicroseconds, microsecondsFromSeconds, technicalForColorProfile, colorProfileForTechnical, playbackStartTime, previewTimelineSeconds, exportDurationSeconds, trimPlaybackState, displayResolution, selectionInAssets, selectableAssetIds, selectAllState, toggleSelectAll, navigationState, assetControlState, emptyStateFor, shouldRenderExportFacts, isExportCanceledError, shouldResetSelectionOnSourceChange } = require("../src/renderer/editor-ui-state");
 
 test("watermark controls preserve an explicit zero opacity", () => {
   const positions = { bottomRight: { x: 1, y: 1 } };
@@ -126,4 +126,33 @@ test("changing library source resets the active selection", () => {
   assert.equal(shouldResetSelectionOnSourceChange("camera", "local"), true);
   assert.equal(shouldResetSelectionOnSourceChange("local", "camera"), true);
   assert.equal(shouldResetSelectionOnSourceChange("camera", "camera"), false);
+});
+
+test("select all takes every asset in view and toggles back off", () => {
+  const assets = [{ id: "v1" }, { id: "p1", mediaKind: "photo" }, { id: "v2", mediaKind: "video" }];
+  assert.deepEqual(selectableAssetIds(assets), ["v1", "p1", "v2"]);
+  const selected = new Set();
+  assert.deepEqual(selectAllState(assets, selected), { selectable: ["v1", "p1", "v2"], allSelected: false, enabled: true });
+  assert.deepEqual([...toggleSelectAll(assets, selected)], ["v1", "p1", "v2"]);
+  assert.equal(selectAllState(assets, selected).allSelected, true);
+  assert.deepEqual([...toggleSelectAll(assets, selected)], []);
+});
+
+test("select all offers nothing when there is nothing to select", () => {
+  // Both media kinds are exportable, but an asset with no id cannot be keyed in
+  // the selection set, and an empty view has nothing to offer.
+  assert.deepEqual(selectableAssetIds([{ mediaKind: "photo" }]), []);
+  assert.deepEqual(selectAllState([], new Set()), { selectable: [], allSelected: false, enabled: false });
+  assert.deepEqual([...toggleSelectAll([], new Set())], []);
+  assert.equal(selectAllState([{ id: "p1", mediaKind: "photo" }], new Set()).enabled, true);
+});
+
+test("select all leaves selections outside the current view alone", () => {
+  const assets = [{ id: "v1" }, { id: "v2" }];
+  const selected = new Set(["other"]);
+  toggleSelectAll(assets, selected);
+  assert.deepEqual([...selected].sort(), ["other", "v1", "v2"]);
+  toggleSelectAll(assets, selected);
+  assert.deepEqual([...selected], ["other"]);
+  assert.equal(selectAllState(assets, ["v1", "v2"]).allSelected, true);
 });

@@ -63,6 +63,88 @@ function jpegSize(filePath) {
   }
 }
 
+// EXIF orientation of a JPEG, read from its own header. 1 means "as stored";
+// anything else means the pixels have to be rotated or mirrored to look right.
+// Only IFD0 is read, because that is the only place the tag lives.
+function jpegOrientation(filePath) {
+  let handle = null;
+  try {
+    handle = fs.openSync(filePath, "r");
+    const header = Buffer.alloc(2);
+    if (fs.readSync(handle, header, 0, 2, 0) < 2) return null;
+    if (header[0] !== 0xff || header[1] !== 0xd8) return null;
+    let offset = 2;
+    const segment = Buffer.alloc(9);
+    while (offset < 1 << 20) {
+      if (fs.readSync(handle, segment, 0, 9, offset) < 4) return null;
+      if (segment[0] !== 0xff) return null;
+      const marker = segment[1];
+      if (marker === 0xda || marker === 0xd9) return 1;
+      if (marker === 0xd8 || (marker >= 0xd0 && marker <= 0xd7)) { offset += 2; continue; }
+      const length = segment.readUInt16BE(2);
+      if (length < 2) return null;
+      if (marker === 0xe1) {
+        const payload = Buffer.alloc(Math.min(length - 2, 4096));
+        const read = fs.readSync(handle, payload, 0, payload.length, offset + 4);
+        if (read >= 14 && payload.toString("latin1", 0, 6) === "Exif\0\0") {
+          const tiff = payload.subarray(6, read);
+          const little = tiff[0] === 0x49;
+          const u16 = o => little ? tiff.readUInt16LE(o) : tiff.readUInt16BE(o);
+          const u32 = o => little ? tiff.readUInt32LE(o) : tiff.readUInt32BE(o);
+          if (u16(2) === 0x002a) {
+            const ifd0 = u32(4);
+            const count = u16(ifd0);
+            for (let index = 0; index < count; index++) {
+              const entry = ifd0 + 2 + index * 12;
+              if (entry + 12 > tiff.length) break;
+              if (u16(entry) === 0x0112) {
+                const value = u16(entry + 8);
+                return value >= 1 && value <= 8 ? value : 1;
+              }
+            }
+          }
+        }
+        return 1;
+      }
+      offset += 2 + length;
+    }
+    return null;
+  } catch {
+    return null;
+  } finally {
+    if (handle !== null) { try { fs.closeSync(handle); } catch {} }
+  }
+}
+
+// DJI writes a .THM and a .SCR beside every still, but neither carries the EXIF
+// orientation. Copying them is what put a portrait shot on its side in the grid
+// while the preview -- which decodes the original -- showed it upright. A
+// rotated still therefore cannot be served from its companions at all.
+function isRotatedStill(filePath) {
+  if (!filePath || !/\.jpe?g$/i.test(filePath)) return false;
+  const orientation = jpegOrientation(filePath);
+  return orientation !== null && orientation > 1;
+}
+
+// The cache key has to follow the source that actually produced an entry: a
+// rotated still is generated from the original, everything else comes from the
+// companion. Keeping one key for both would serve the old sideways copy from
+// the cache forever.
+function thumbnailSignature({ thmPath = null, scrPath = null, originalPath = null } = {}) {
+  if (isRotatedStill(originalPath)) return signatureOf(originalPath) || signatureOf(thmPath || scrPath);
+  return signatureOf(thmPath || scrPath) || signatureOf(originalPath);
+}
+
+// ffmpeg autorotates a JPEG on the way in, so scaling the original is all it
+// takes to get an upright tile at the size the grid asked for.
+function stillThumbnailArgs(inputPath, output, minWidth) {
+  const args = ["-y", "-v", "error", "-i", inputPath, "-frames:v", "1", "-q:v", "3"];
+  const width = Math.round(Number(minWidth) || 0);
+  if (width > 0) args.push("-vf", "scale=" + width + ":-2");
+  args.push(output);
+  return args;
+}
+
 // A source is usable when it covers the tile, or when its size cannot be read.
 // An unreadable header should not cost the user their thumbnail.
 function covers(candidate, minWidth) {
@@ -93,11 +175,17 @@ function cacheName(assetId, sourceSignature, minWidth) {
 // one, and this only happens on a card that has no SCR beside its THM.
 async function ensureThumbnail({ ffmpeg = process.env.FFMPEG_PATH || "ffmpeg", assetId, previewPath, originalPath, thmPath = null, scrPath = null, cacheRoot, minWidth = 0 }) {
   fs.mkdirSync(cacheRoot, { recursive: true });
-  const signature = signatureOf(thmPath || scrPath) || signatureOf(originalPath);
+  const signature = thumbnailSignature({ thmPath, scrPath, originalPath });
   const output = path.join(cacheRoot, cacheName(assetId, signature, minWidth));
   if (fs.existsSync(output)) return output;
 
   const copies = [thmPath, scrPath].filter(Boolean);
+  if (isRotatedStill(originalPath)) {
+    if (await run(ffmpeg, stillThumbnailArgs(originalPath, output, minWidth))) return output;
+    // Without a decoder the original is still the only source that carries the
+    // orientation, so a large upright tile beats a small sideways one.
+    if (copyIfExists(originalPath, output)) return output;
+  }
   for (const source of copies) if (covers(source, minWidth) && copyIfExists(source, output)) return output;
   if (originalPath && /\.(?:jpe?g|png)$/i.test(originalPath) && copyIfExists(originalPath, output)) return output;
 
@@ -116,9 +204,13 @@ async function ensureThumbnail({ ffmpeg = process.env.FFMPEG_PATH || "ffmpeg", a
 // Poster chain for selected media: SCR -> LRF attached -> LRF first frame -> Original first frame -> null.
 async function ensurePoster({ ffmpeg = process.env.FFMPEG_PATH || "ffmpeg", assetId, previewPath, originalPath, scrPath = null, posterRoot }) {
   fs.mkdirSync(posterRoot, { recursive: true });
-  const signature = signatureOf(scrPath) || signatureOf(originalPath);
+  const signature = thumbnailSignature({ scrPath, originalPath });
   const output = path.join(posterRoot, cacheName(assetId, signature));
   if (fs.existsSync(output)) return output;
+  if (isRotatedStill(originalPath)) {
+    if (await run(ffmpeg, stillThumbnailArgs(originalPath, output, 0))) return output;
+    if (copyIfExists(originalPath, output)) return output;
+  }
   if (scrPath && copyIfExists(scrPath, output)) return output;
   if (originalPath && /\.(?:jpe?g|png)$/i.test(originalPath) && copyIfExists(originalPath, output)) return output;
   if (previewPath) {
@@ -131,6 +223,6 @@ async function ensurePoster({ ffmpeg = process.env.FFMPEG_PATH || "ffmpeg", asse
 
 function placeholderState(hasPreview) { return { kind: "PLACEHOLDER", label: hasPreview ? "NO_THUMBNAIL" : "PREVIEW_UNAVAILABLE" }; }
 
-function resolveCachePath({ assetId, thmPath = null, scrPath = null, originalPath = null, cacheRoot, minWidth = 0 }) { const signature = signatureOf(thmPath || scrPath) || signatureOf(originalPath); return path.join(cacheRoot, cacheName(assetId, signature, minWidth)); }
+function resolveCachePath({ assetId, thmPath = null, scrPath = null, originalPath = null, cacheRoot, minWidth = 0 }) { const signature = thumbnailSignature({ thmPath, scrPath, originalPath }); return path.join(cacheRoot, cacheName(assetId, signature, minWidth)); }
 
-module.exports = { ensureThumbnail, ensurePoster, placeholderState, resolveCachePath, jpegSize, covers, cacheName };
+module.exports = { ensureThumbnail, ensurePoster, placeholderState, resolveCachePath, jpegSize, jpegOrientation, isRotatedStill, thumbnailSignature, covers, cacheName };

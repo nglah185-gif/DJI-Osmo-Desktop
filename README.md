@@ -15,7 +15,7 @@ Current release: **v2.4.0** — the portable build is attached to
 |---|---|
 | **Camera library** | Detects a connected DJI camera, scans `DCIM`, and lists video, photos and LRF proxies without copying anything first. |
 | **Local library** | Add folders or import individual files; camera and local media share one grid. |
-| **D-Log restoration** | The colour mode is read from the clip's own DJI metadata rather than guessed from the filename, and the matching first-party Rec.709 transform is applied. The chain keeps 10-bit precision end to end. |
+| **D-Log restoration** | The colour mode is read from the clip's own DJI metadata rather than guessed from the filename, and the matching first-party Rec.709 transform is applied. The chain keeps 10-bit precision end to end. Batch export can also be told the model by hand for footage whose metadata no longer names the camera. |
 | **Watermarks** | Official per-camera badges. Size and placement come from an ink box measured off each asset, so the mark lands on the same visual line on landscape video, portrait video and stills alike. |
 | **Editing** | Non-destructive trim, speed, rotate, crop and flip, plus the creative LUTs that ship for some models. Source files are never modified. |
 | **Live preview** | A frame streamer driven by the *same* effect graph the export uses, so the preview cannot disagree with the file. |
@@ -110,10 +110,11 @@ node scripts/ui-capture.js <label>   # screenshot into artifacts/ui/
 
 ## Known limitations
 
-- **Batch export is video-only.** Photos are visible in the library but cannot be
-  selected for batch export; the pipeline is a video colour pipeline. (An
-  unattended export script that *does* handle photos lives in
-  `scripts/export-camera-batch.js`.)
+- **Photos take a separate path.** A clip goes through the colour pipeline and the
+  encoder; a still gets one watermark overlay and a single JPEG encode (or a plain
+  copy when no watermark is chosen), carrying its EXIF and capture time across.
+  Both are exportable from the same batch dialog and from
+  `scripts/export-camera-batch.js`.
 - **Parallelism does not scale throughput.** A single 4K D-Log export uses about
   60% of a 12-thread CPU, but two at once only gain around 10%: the hardware
   encoder is a single shared engine, and the Rec.709 LUT is CPU-bound when the

@@ -52,7 +52,16 @@ const INK_WIDTH_RATIO = 0.195;
 // being scaled, i.e. the badge itself, which previously pinned the badge to its
 // own 774px width). Height is stated explicitly as ratio*(inkH/inkW) instead of
 // -1, because -1 resolved against the reference frame and squashed the glyphs.
-function inkOverlayFilters({ inputIndex, videoLabel, scale = INK_WIDTH_RATIO, opacity = 1, centerYRatio = INK_CENTER_Y_RATIO, ink = OA4_INK_BOX, canvas = null }) {
+function evenPixel(value) {
+  // Round to the nearest even number rather than truncating. trunc always floors,
+  // which on small frames removes a disproportionate share of the badge height:
+  // a 9:16 1080x1920 frame wants h=19.6 and got 18, and a 640x360 preview wanted
+  // 11.6 and got 10, distorting the glyph aspect to 11.67:1 and 12.40:1 against
+  // the true 10.75:1. Width is large enough that flooring is invisible, but it is
+  // rounded the same way for symmetry.
+  return Math.max(2, Math.round(Number(value) / 2) * 2);
+}
+function inkOverlayFilters({ inputIndex, videoLabel, scale = INK_WIDTH_RATIO, opacity = 1, centerYRatio = INK_CENTER_Y_RATIO, ink = OA4_INK_BOX, canvas = null, videoWidth = null }) {
   const s = Math.max(0.01, Math.min(1, Number(scale)));
   const a = Math.max(0, Math.min(1, Number(opacity)));
   const y = Math.max(0, Math.min(1, Number(centerYRatio)));
@@ -62,12 +71,22 @@ function inkOverlayFilters({ inputIndex, videoLabel, scale = INK_WIDTH_RATIO, op
   const crop = "crop=" + box.width + ":" + box.height + ":" + box.x + ":" + box.y;
   const src = "[" + inputIndex + ":v]format=rgba," + crop
     + ",colorchannelmixer=aa=" + a.toFixed(4) + "[watermark_src]";
-  // Round to the nearest even number rather than truncating. trunc always floors,
-  // which on small frames removes a disproportionate share of the badge height:
-  // a 9:16 1080x1920 frame wants h=19.6 and got 18, and a 640x360 preview wanted
-  // 11.6 and got 10, distorting the glyph aspect to 11.67:1 and 12.40:1 against
-  // the true 10.75:1. Width is large enough that flooring is invisible, but it is
-  // rounded the same way for symmetry.
+  // The badge is a looped still whose on-screen size is a fixed fraction of the
+  // frame width, so when the frame width is known (export probes it) the target
+  // size is a constant and scale2ref is pure overhead: it makes every 4K frame
+  // pass through a second scaler on its way to the overlay. The static scale
+  // resolves to the exact same numbers scale2ref would, minus the per-frame
+  // reference pass. Callers that do not know the frame width -- previews and
+  // geometry-driven graphs whose dimensions change before compositing -- keep
+  // the dynamic path.
+  const width = Number(videoWidth);
+  if (Number.isFinite(width) && width > 0) {
+    const w = evenPixel(width * s);
+    const h = evenPixel(width * s * inkAspect);
+    const sized = "[watermark_src]scale=" + w + ":" + h + ":flags=lanczos[watermark]";
+    const composite = videoLabel + "[watermark]overlay=x=(main_w-overlay_w)/2:y=(" + y.toFixed(4) + "*main_h-overlay_h/2)[overlay]";
+    return { src, sized, composite };
+  }
   const evenRound = expr => "round(" + expr + "/2)*2";
   const sized = "[watermark_src]" + videoLabel
     + "scale2ref=w=" + evenRound("iw*" + s.toFixed(4))

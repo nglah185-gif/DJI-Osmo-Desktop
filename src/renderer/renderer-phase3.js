@@ -10,6 +10,8 @@
   const exportModalState = window.__exportModalState;
   const batchExportState = window.__batchExportState;
   const batchOptionsState = window.__batchExportOptions;
+  const videoOptionsState = window.__videoExportOptions;
+  const badgePicker = window.__badgePicker;
   // Shared with the main process so the editor and a batch agree on which clips
   // are D-Log and which camera transform each needs.
   const autoRestore = window.__autoRestore;
@@ -340,6 +342,7 @@ function playClockSilently() {
       if (count) count.textContent = ts("batchExport.selected", { count: batchIds.size });
     }
     renderLibraryPanel();
+    paintSelectAllControl();
   }
   function toggleBatchSelection(assetId) {
     if (batchIds.has(assetId)) batchIds.delete(assetId); else batchIds.add(assetId);
@@ -371,17 +374,29 @@ function playClockSilently() {
     const exportButton = $("library-export-selected");
     if (exportButton) exportButton.disabled = batchIds.size === 0 || !!exportingAssetId;
   }
-  // Selecting a whole card at a time. Batch export is video-only: it decodes and
-  // re-encodes footage through the colour pipeline, and a still photo has no
-  // place in it. So the bulk action only targets what can actually be exported;
-  // picking photos just to have them reported as skipped helps nobody.
-  function selectAllVisible() {
-    for (const asset of activeAssets()) {
-      if (asset.mediaKind === "photo") continue;
-      batchIds.add(asset.id);
-    }
+  // Selecting the whole view at a time. Clips and photos are both exportable --
+  // they just take different paths through the pipeline -- so "all" means every
+  // row the user can see.
+  //
+  // It is a toggle: once everything exportable is selected, a second press
+  // clears it, so a mis-click is undone without hunting for Clear.
+  function toggleSelectAll() {
+    editorUiState.toggleSelectAll(activeAssets(), batchIds);
     paintSelectionBar();
     paintGrid();
+  }
+  // The list toolbar and the inspector each carry a select-all control, and both
+  // read the same view, so they always agree on the label and on whether they
+  // can be used at all (a Photos filter has nothing to offer batch export).
+  function paintSelectAllControl(assets = activeAssets()) {
+    const model = editorUiState.selectAllState(assets, batchIds);
+    const label = ts(model.allSelected ? "batchExport.selectNone" : "batchExport.selectAll");
+    for (const id of ["selection-all", "library-select-all"]) {
+      const button = $(id);
+      if (!button) continue;
+      button.disabled = !model.enabled;
+      button.textContent = label;
+    }
   }
   function createCard(asset, priority) {
     // A div with role=button rather than a real <button>: the per-card checkbox
@@ -391,19 +406,16 @@ function playClockSilently() {
     const card = document.createElement("div"); card.className = "media-card"; card.setAttribute("role", "button"); card.tabIndex = 0;
     card.dataset.assetId = asset.id;
     // The viewport-recycling grid reuses nodes across assets, so the checkbox
-    // state is written on every paint rather than only at creation. Photos get
-    // no checkbox at all: batch export cannot take them, so offering the control
-    // only produced a selection that had to be dropped later.
-    let select = null;
-    if (asset.mediaKind !== "photo") {
-      select = document.createElement("span"); select.className = "card-select"; select.setAttribute("role", "checkbox"); select.setAttribute("aria-checked", "false"); select.tabIndex = 0;
-      select.title = ts("batchExport.select");
-      select.addEventListener("click", event => { event.preventDefault(); event.stopPropagation(); toggleBatchSelection(asset.id); });
-      select.addEventListener("keydown", event => {
-        if (event.key !== "Enter" && event.key !== " ") return;
-        event.preventDefault(); event.stopPropagation(); toggleBatchSelection(asset.id);
-      });
-    }
+    // state is written on every paint rather than only at creation. Every asset
+    // gets one: a still is exportable too, it just takes the JPEG path instead
+    // of the colour pipeline.
+    const select = document.createElement("span"); select.className = "card-select"; select.setAttribute("role", "checkbox"); select.setAttribute("aria-checked", "false"); select.tabIndex = 0;
+    select.title = ts("batchExport.select");
+    select.addEventListener("click", event => { event.preventDefault(); event.stopPropagation(); toggleBatchSelection(asset.id); });
+    select.addEventListener("keydown", event => {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      event.preventDefault(); event.stopPropagation(); toggleBatchSelection(asset.id);
+    });
     const thumb = document.createElement("div"); thumb.className = "thumb";
     const cachedUrl = thumbCache.get(thumbKey(asset.id)); if (cachedUrl) { const cached = document.createElement("img"); cached.src = cachedUrl; thumb.appendChild(cached); } else { thumb.appendChild(makePlaceholder()); }
     const main = document.createElement("div"); main.className = "card-main";
@@ -455,6 +467,10 @@ function playClockSilently() {
     // renderer was simply passing 1 and laying every card out on its own row.
     const view = viewGeometry();
     const columns = gridColumns();
+    // Stretch the columns to the row they sit in, but never past it: in a narrow
+    // rail the cards shrink instead of hanging off the edge.
+    const fit = Math.floor((grid.clientWidth - LEFT * 2 - (columns - 1) * view.gap) / columns);
+    const usable = Math.max(150, fit);
     const { start, end, spacerHeight } = computeWindow({ scrollTop: grid.scrollTop, viewportHeight: grid.clientHeight, itemHeight: view.itemH, gap: 0, columns, total, overscanRows: 2 });
     const selected = state.asset ? state.asset.id : null;
     const firstRow = Math.floor(grid.scrollTop / view.itemH);
@@ -476,7 +492,8 @@ function playClockSilently() {
       if (node.select) node.select.setAttribute("aria-checked", picked ? "true" : "false");
       node.card.classList.toggle("picked", picked);
       node.card.style.top = (LEFT + row * view.itemH) + "px";
-      node.card.style.left = (LEFT + column * (view.cardW + view.gap)) + "px";
+      node.card.style.left = (LEFT + column * (usable + view.gap)) + "px";
+      node.card.style.width = usable + "px";
       fragment.appendChild(node.card);
       active.add(asset.id);
       if (row >= firstRow && row < lastRow) counted++;
@@ -488,6 +505,7 @@ function playClockSilently() {
     for (let i = prefetch.start; i < prefetch.end; i++) prefetchThumbnail(assets[i].id);
     const spacer = $("grid-spacer"); spacer.style.height = (spacerHeight + LEFT) + "px";
     const keep = $("scan-loading"); keep ? grid.replaceChildren(spacer, keep, fragment) : grid.replaceChildren(spacer, fragment);
+    paintSelectAllControl(assets);
     renderStats();
   }
 
@@ -541,8 +559,11 @@ function playClockSilently() {
     const autoPreset = isDlog ? family + (family === "pocket4" || family === "pocket4p" ? "-dlog" : "-dlogm") : "normal";
     const watermarks = Array.isArray(opened.watermarks) ? opened.watermarks : [];
     const watermarkId = opened.watermark && opened.watermark.id || watermarks[0] && watermarks[0].id || "none";
+    state.watermarkMatched = watermarks;
+    state.watermarkCatalog = Array.isArray(opened.watermarkCatalog) ? opened.watermarkCatalog : [];
     const select = $("watermark");
-    if (select) { select.replaceChildren(new Option(ts("watermark.none"), "none")); for (const entry of watermarks) select.appendChild(new Option(entry.name, entry.id)); }
+    if (select) { select.replaceChildren(new Option(ts("watermark.none"), "none")); for (const entry of watermarks) select.appendChild(new Option(entry.familyName + " " + badgePicker.variantLabel(entry.variant, ts), entry.id)); }
+    editorBadgePicker.refresh();
     state.editor = { clip: { ...opened.clip }, colorPreset: autoPreset, technicalTransform: technical, creativeLook: "", displayTransform: { ...opened.clip.displayTransform }, watermark: { id: watermarkId, enabled: false, scale: 0.195, opacity: 1, position: { x: 0.5, y: 1 } } };
     state.timelineZoom = 1;
     state.wmPosition = "bottomCenter";
@@ -566,7 +587,7 @@ function playClockSilently() {
     if (!isPhoto && autoPreset !== "normal") await edit();
   }
 
-  function syncInspectorFromEditor() { const editor = state.editor || {}; const clip = editor.clip || {}; const tf = editor.displayTransform || {}; const technical = editor.technicalTransform || (editor.colorPreset === "action4-dlogm" ? "action4" : editor.colorPreset === "action5pro-dlogm" ? "action5pro" : editor.colorPreset === "action6-dlogm" ? "action6" : "none"); const creative = editor.creativeLook !== undefined ? editor.creativeLook : ""; $("color-profile").value = editorUiState.colorProfileForTechnical(technical); $("technical-transform").value = technical; $("creative-look").value = creative; $("trim-in").value = editorUiState.secondsFromMicroseconds(clip.sourceInUs); $("trim-out").value = editorUiState.secondsFromMicroseconds(clip.sourceOutUs); $("speed").value = String(clip.playbackRate || 1); $("rotate").value = String(tf.rotation || 0); $("crop").value = String(tf.crop && tf.crop.left || 0); $("flip-h").checked = !!tf.flipHorizontal; $("flip-v").checked = !!tf.flipVertical; const wm = editor.watermark || {}; $("watermark-enable").checked = !!wm.enabled; $("watermark").disabled = !wm.enabled; $("watermark").value = wm.id || "none"; $("watermark-scale").value = String(editorUiState.numberOrDefault(wm.scale, 0.195)); $("watermark-opacity").value = String(editorUiState.numberOrDefault(wm.opacity, 1)); }
+  function syncInspectorFromEditor() { const editor = state.editor || {}; const clip = editor.clip || {}; const tf = editor.displayTransform || {}; const technical = editor.technicalTransform || (editor.colorPreset === "action4-dlogm" ? "action4" : editor.colorPreset === "action5pro-dlogm" ? "action5pro" : editor.colorPreset === "action6-dlogm" ? "action6" : "none"); const creative = editor.creativeLook !== undefined ? editor.creativeLook : ""; $("color-profile").value = editorUiState.colorProfileForTechnical(technical); $("technical-transform").value = technical; $("creative-look").value = creative; $("trim-in").value = editorUiState.secondsFromMicroseconds(clip.sourceInUs); $("trim-out").value = editorUiState.secondsFromMicroseconds(clip.sourceOutUs); $("speed").value = String(clip.playbackRate || 1); $("rotate").value = String(tf.rotation || 0); $("crop").value = String(tf.crop && tf.crop.left || 0); $("flip-h").checked = !!tf.flipHorizontal; $("flip-v").checked = !!tf.flipVertical; const wm = editor.watermark || {}; $("watermark-enable").checked = !!wm.enabled; $("watermark").disabled = !wm.enabled; $("watermark").value = wm.id || "none"; $("watermark-scale").value = String(editorUiState.numberOrDefault(wm.scale, 0.195)); $("watermark-opacity").value = String(editorUiState.numberOrDefault(wm.opacity, 1)); editorBadgePicker.refresh(); }
 
   function editorFromControls() { const editor = state.editor || {}; const clip = { ...(editor.clip || {}) }; const durationUs = Number(clip.sourceOutUs || video.duration * 1000000 || 1); let segments = timelineModel ? timelineModel.normalize(editor.segments, durationUs) : []; const sourceIn = editorUiState.microsecondsFromSeconds($("trim-in").value); const requestedOut = editorUiState.microsecondsFromSeconds($("trim-out").value); if (!segments.length) segments = [{ id: "segment-1", sourceInUs: sourceIn, sourceOutUs: Math.max(sourceIn + 1, requestedOut || durationUs) }]; const first = segments[0], last = segments[segments.length - 1]; clip.sourceInUs = first.sourceInUs; clip.sourceOutUs = last.sourceOutUs; clip.playbackRate = Number($("speed").value) || 1; const creativeLook = $("creative-look").value; const colorProfile = $("color-profile").value; const technicalTransform = $("technical-transform").value; const watermark = editorUiState.watermarkFromControls({ id: $("watermark").value, enabled: $("watermark-enable").checked, scale: $("watermark-scale").value, opacity: $("watermark-opacity").value, position: state.wmPosition }, WM_POSITIONS); return { ...editor, clip, segments, colorPreset: presetFor(colorProfile, technicalTransform, creativeLook), technicalTransform, creativeLook, displayTransform: { rotation: Number($("rotate").value) || 0, crop: { left: Number($("crop").value) || 0, top: 0, right: 0, bottom: 0 }, flipHorizontal: $("flip-h").checked, flipVertical: $("flip-v").checked }, watermark }; }
 
@@ -810,7 +831,7 @@ function playClockSilently() {
   }
   function renderTimelineSegments() { const host = $("timeline-segments"), ruler = $("timeline-ruler"), duration = video.duration || 0; if (!host || !(duration > 0)) return; const segments = timelineModel ? timelineModel.normalize(state.editor && state.editor.segments, duration * 1000000) : []; host.replaceChildren(); host.style.width = (100 * state.timelineZoom) + "%"; for (const segment of segments) { const el = document.createElement("div"); el.className = "timeline-segment" + (segment.id === state.selectedSegmentId ? " selected" : ""); el.dataset.id = segment.id; el.style.left = (segment.sourceInUs / 1000000 / duration * 100) + "%"; el.style.width = ((segment.sourceOutUs - segment.sourceInUs) / 1000000 / duration * 100) + "%"; el.innerHTML = '<span class="segment-handle segment-handle-in"></span><span class="segment-label"></span><span class="segment-handle segment-handle-out"></span>'; el.querySelector(".segment-label").textContent = fmtDuration((segment.sourceOutUs - segment.sourceInUs) / 1000000); el.addEventListener("pointerdown", e => { if (e.target.classList.contains("segment-handle")) return; e.stopPropagation(); state.selectedSegmentId = segment.id; const startX = e.clientX, original = segment.sourceInUs; try { el.setPointerCapture(e.pointerId); } catch {} const move = ev => { const delta = (ev.clientX - startX) / Math.max(1, host.getBoundingClientRect().width) * duration * 1000000 / state.timelineZoom; state.editor.segments = timelineModel.moveSegment(state.editor.segments, segment.id, delta, duration * 1000000); drawPlayer(); queueTrimEdit(); }; const end = () => { el.removeEventListener("pointermove", move); renderExportFacts(); }; el.addEventListener("pointermove", move); el.addEventListener("pointerup", end, { once: true }); el.addEventListener("pointercancel", end, { once: true }); }); el.addEventListener("click", e => { e.stopPropagation(); state.selectedSegmentId = segment.id; renderTimelineSegments(); }); host.appendChild(el); } if (ruler) { ruler.replaceChildren(); const step = duration > 30 ? 10 : duration > 10 ? 5 : 1; for (let t = 0; t <= duration + .001; t += step) { const tick = document.createElement("span"); tick.textContent = fmtDuration(t); tick.style.left = (t / duration * 100 * state.timelineZoom) + "%"; ruler.appendChild(tick); } } const clip = state.editor && state.editor.clip; if (clip) { $("trim-in").value = editorUiState.secondsFromMicroseconds(segments[0] ? segments[0].sourceInUs : clip.sourceInUs); $("trim-out").value = editorUiState.secondsFromMicroseconds(segments.length ? segments[segments.length - 1].sourceOutUs : clip.sourceOutUs); } }
 
-  function renderTimelineSegments() { const duration = video.duration || 0, clip = state.editor && state.editor.clip; const track = $("timeline-zoom-content"); if (!track || !(duration > 0) || !clip) return; const scale = state.timelineZoom; track.style.width = (100 * scale) + "%"; $("timeline-thumbnails").style.width = "100%"; const start = (clip.sourceInUs || 0) / 1000000 / duration * 100, end = (clip.sourceOutUs || duration * 1000000) / 1000000 / duration * 100; $("timeline-clip").style.left = start + "%"; $("timeline-clip").style.width = Math.max(0, end - start) + "%"; $("timeline-trim-dim-left").style.width = start + "%"; $("timeline-trim-dim-right").style.left = end + "%"; $("timeline-trim-dim-right").style.width = Math.max(0, 100 - end) + "%"; $("playhead").style.left = ((video.currentTime || 0) / duration * 100) + "%"; $("timeline-zoom-value").textContent = Math.round(scale * 100) + "%"; }
+  function renderTimelineSegments() { const duration = video.duration || 0, clip = state.editor && state.editor.clip; const track = $("timeline-zoom-content"); if (!track || !(duration > 0) || !clip) return; const scale = state.timelineZoom; track.style.width = (100 * scale) + "%"; $("timeline-thumbnails").style.width = "100%"; const start = (clip.sourceInUs || 0) / 1000000 / duration * 100, end = (clip.sourceOutUs || duration * 1000000) / 1000000 / duration * 100; $("timeline-clip").style.left = start + "%"; $("timeline-clip").style.width = Math.max(0, end - start) + "%"; $("timeline-trim-dim-left").style.width = start + "%"; $("timeline-trim-dim-right").style.left = end + "%"; $("timeline-trim-dim-right").style.width = Math.max(0, 100 - end) + "%"; $("playhead").style.left = ((video.currentTime || 0) / duration * 100) + "%"; $("timeline-zoom-value").textContent = Math.round(scale * 100) + "%"; /* The brackets are the two ends of the kept range: without this they sat parked at the edges of the track. Their inner edge faces the kept part, so the out bracket is pulled back by its own width. */ const inHandle = $("trim-in-handle"), outHandle = $("trim-out-handle"); if (inHandle) { inHandle.style.left = start + "%"; inHandle.style.right = "auto"; } if (outHandle) { outHandle.style.left = "calc(" + end + "% - 16px)"; outHandle.style.right = "auto"; } }
   video.addEventListener("canplay", () => { $("poster-preview").hidden = true; videoReady(); });
   video.addEventListener("playing", () => { videoReady(); });
   video.addEventListener("loadstart", () => { if (state.mode === "browse" && state.asset) showVideoBusy(); });
@@ -1142,15 +1163,162 @@ video.addEventListener("timeupdate", () => { if (state.mode === "edit" && state.
     if (exportModal && exportModal.destination) api.revealPath(exportModal.destination);
   });
 
+  // ---- Badge picker ----
+  // One control serves the editor's Watermark section and the batch sheet: a
+  // button showing the chosen badge, opening a grouped list where every row
+  // carries its own preview. The native <select> stays in the DOM as the value
+  // holder, so the change plumbing that already exists keeps working.
+  function badgeLabel(entry) { return entry ? badgePicker.variantLabel(entry.variant, ts) : ts("watermark.none"); }
+  function mountBadgePicker(hostId, selectId, sources, enableId) {
+    const host = $(hostId), select = $(selectId);
+    if (!host || !select || !badgePicker) return { refresh() {}, close() {} };
+    const button = document.createElement("button"); button.type = "button"; button.className = "badge-picker"; button.setAttribute("aria-haspopup", "listbox"); button.setAttribute("aria-expanded", "false");
+    const preview = document.createElement("img"); preview.className = "badge-preview"; preview.alt = ""; preview.hidden = true;
+    const name = document.createElement("span"); name.className = "badge-picker-name";
+    const chevron = document.createElement("span"); chevron.className = "badge-chevron"; chevron.dataset.icon = "more";
+    button.append(preview, name, chevron);
+    const menu = document.createElement("div"); menu.className = "badge-menu"; menu.hidden = true; menu.setAttribute("role", "listbox");
+    host.append(button, menu);
+    function close() { menu.hidden = true; button.setAttribute("aria-expanded", "false"); }
+    // Choosing a badge is choosing to have one: picking a style while the
+    // watermark is switched off turns it on, so the choice is never swallowed.
+    function pick(id) {
+      select.value = id;
+      const enable = enableId ? $(enableId) : null;
+      if (enable && id !== "none" && !enable.checked) { enable.checked = true; enable.dispatchEvent(new Event("change", { bubbles: true })); }
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+      close();
+      refresh();
+    }
+    function row(entry) {
+      const item = document.createElement("button"); item.type = "button"; item.className = "badge-row"; item.setAttribute("role", "option"); item.dataset.id = entry.id;
+      if (entry.url) { const img = document.createElement("img"); img.className = "badge-preview"; img.src = entry.url; img.alt = ""; img.loading = "lazy"; item.appendChild(img); }
+      const text = document.createElement("span"); text.className = "badge-row-name"; text.textContent = badgePicker.tileLabel(entry.variant, ts);
+      item.appendChild(text);
+      item.title = entry.familyName + " \u00b7 " + badgeLabel(entry);
+      item.addEventListener("click", event => { event.preventDefault(); event.stopPropagation(); pick(entry.id); });
+      return item;
+    }
+    function refresh() {
+      const available = sources() || {};
+      const groups = badgePicker.sections(available);
+      // The select is the value the editor reads, so it must accept every badge
+      // on offer -- not only the clip's own device -- or a badge picked from
+      // another group would silently blank the selection.
+      const offered = [];
+      for (const group of groups) for (const entry of group.entries) offered.push(entry);
+      const previous = select.value;
+      select.replaceChildren(new Option(ts("watermark.none"), "none"));
+      for (const entry of offered) select.appendChild(new Option((entry.familyName ? entry.familyName + " " : "") + badgeLabel(entry), entry.id));
+      if (previous !== "none" && !offered.some(entry => entry.id === previous)) select.value = offered.length ? offered[0].id : "none";
+      else select.value = previous;
+      menu.replaceChildren();
+      // "No watermark" is a real choice, so it is a row like any other.
+      const none = document.createElement("button"); none.type = "button"; none.className = "badge-row"; none.dataset.id = "none"; none.setAttribute("role", "option");
+      const noneText = document.createElement("span"); noneText.className = "badge-row-name"; noneText.textContent = ts("watermark.none");
+      none.appendChild(noneText);
+      none.addEventListener("click", event => { event.preventDefault(); event.stopPropagation(); pick("none"); });
+      menu.appendChild(none);
+      let tileIndex = 0;
+      for (const group of groups) {
+        const head = document.createElement("div"); head.className = "badge-group"; head.textContent = group.name;
+        menu.appendChild(head);
+        for (const entry of group.entries) { const tile = row(entry); tile.style.setProperty("--i", String(tileIndex++)); menu.appendChild(tile); }
+      }
+      const current = badgePicker.findEntry(select.value, available);
+      preview.hidden = !(current && current.url);
+      if (current && current.url) preview.src = current.url;
+      name.textContent = badgeLabel(current);
+      name.title = current ? current.familyName + " \u00b7 " + badgeLabel(current) : ts("watermark.none");
+      for (const item of menu.querySelectorAll(".badge-row")) item.classList.toggle("active", item.dataset.id === select.value);
+    }
+    button.addEventListener("click", event => { event.preventDefault(); event.stopPropagation(); const opening = menu.hidden; menu.hidden = !opening; button.setAttribute("aria-expanded", opening ? "true" : "false"); if (opening) { menu.classList.add("settle"); setTimeout(() => menu.classList.remove("settle"), 520); const active = menu.querySelector(".badge-row.active"); if (active) active.scrollIntoView({ block: "nearest" }); } });
+    menu.addEventListener("click", event => event.stopPropagation());
+    document.addEventListener("click", () => { if (!menu.hidden) close(); });
+    host.addEventListener("keydown", event => { if (event.key === "Escape" && !menu.hidden) { close(); button.focus(); } });
+    return { refresh, close };
+  }
+  const editorBadgePicker = mountBadgePicker("watermark-picker-host", "watermark", () => ({ matched: state.watermarkMatched || [], catalog: state.watermarkCatalog || [] }), "watermark-enable");
+  const batchBadgePicker = mountBadgePicker("batch-watermark-picker-host", "batch-option-watermark-id", () => ({ matched: (batchOptions && batchOptionsState.view(batchOptions).watermarks) || [], catalog: batchCatalog }), "batch-option-watermark");
+
+  // ---- Rail widths ----
+  // Drag the seam beside the media library or the inspector to resize it. The
+  // width is remembered between sessions; double-click restores the shipped
+  // width, and the arrows nudge it when the seam has focus.
+  (function mountRailSplitters() {
+    const workspace = document.querySelector(".workspace");
+    if (!workspace) return;
+    const KEY = "dji-osmo-desktop-v2.rail-widths";
+    const bounds = { nav: [244, 620], insp: [244, 620] };
+    let saved = {};
+    try { saved = JSON.parse(localStorage.getItem(KEY) || "{}") || {}; } catch { saved = {}; }
+    const root = document.documentElement;
+    if (Number(saved.nav)) root.style.setProperty("--nav-w", saved.nav + "px");
+    if (Number(saved.insp)) root.style.setProperty("--insp-w", saved.insp + "px");
+    const mount = (side, variable, shipped) => {
+      const handle = document.createElement("div");
+      handle.className = "rail-splitter " + side;
+      handle.tabIndex = 0;
+      handle.setAttribute("role", "separator");
+      handle.setAttribute("aria-orientation", "vertical");
+      handle.setAttribute("aria-label", side === "nav" ? ts("library.title") : ts("aria.inspector"));
+      workspace.appendChild(handle);
+      const current = () => parseFloat(getComputedStyle(root).getPropertyValue(variable)) || shipped;
+      const apply = (value, remember) => {
+        const [low, high] = bounds[side];
+        const width = Math.min(high, Math.max(low, Math.round(value)));
+        root.style.setProperty(variable, width + "px");
+        // The panels were resized, so the grid has to lay itself out again
+        // instead of keeping the positions from the old width.
+        window.dispatchEvent(new Event("resize"));
+        if (remember) { saved[side] = width; try { localStorage.setItem(KEY, JSON.stringify(saved)); } catch { /* private mode */ } }
+      };
+      handle.addEventListener("pointerdown", event => {
+        event.preventDefault();
+        handle.setPointerCapture(event.pointerId);
+        handle.classList.add("dragging");
+        const startX = event.clientX;
+        const startWidth = current();
+        const move = moveEvent => apply(startWidth + (side === "nav" ? 1 : -1) * (moveEvent.clientX - startX), false);
+        const finish = () => {
+          handle.classList.remove("dragging");
+          handle.removeEventListener("pointermove", move);
+          handle.removeEventListener("pointerup", finish);
+          handle.removeEventListener("pointercancel", finish);
+          apply(current(), true);
+        };
+        handle.addEventListener("pointermove", move);
+        handle.addEventListener("pointerup", finish);
+        handle.addEventListener("pointercancel", finish);
+      });
+      handle.addEventListener("dblclick", () => apply(shipped, true));
+      handle.addEventListener("keydown", event => {
+        const step = event.shiftKey ? 32 : 8;
+        if (event.key === "ArrowLeft") apply(current() + (side === "nav" ? -step : step), true);
+        else if (event.key === "ArrowRight") apply(current() + (side === "nav" ? step : -step), true);
+        else return;
+        event.preventDefault();
+      });
+    };
+    mount("nav", "--nav-w", 344);
+    mount("insp", "--insp-w", 312);
+  })();
+
   // ---- Batch export ----
   // The main process owns the queue; this only renders its snapshots. Rows are
   // reconciled by id rather than rebuilt, because a fifty-clip batch emits a
   // progress event per percent per clip and rebuilding the list each time would
   // be thousands of DOM writes.
   let batchModal = null;
+  // The badge catalogue the sheet was opened with, for the picker's "other
+  // devices" half.
+  let batchCatalog = [];
   // Setup-phase state, separate from the queue snapshot: it owns the two
   // decisions the user makes before any work is queued.
   let batchOptions = null;
+  // Video specification choices survive between batch dialogs in one session;
+  // the defaults are "source / quality / 8-bit", i.e. the single-export path.
+  let videoOptions = videoOptionsState ? videoOptionsState.initialState() : null;
   const batchRowNodes = new Map();
   function renderBatchRows(items) {
     const list = $("batch-modal-list");
@@ -1161,17 +1329,23 @@ video.addEventListener("timeupdate", () => { if (state.mode === "edit" && state.
       if (!node) {
         const row = document.createElement("div"); row.className = "batch-row"; row.setAttribute("role", "listitem");
         const name = document.createElement("span"); name.className = "batch-row-name";
+        // A still and a clip share a row shape but not a pipeline, so the row
+        // says which one it is instead of leaving the user to guess from the
+        // extension.
+        const tag = document.createElement("span"); tag.className = "batch-pick-tag"; tag.hidden = true;
         const bar = document.createElement("div"); bar.className = "batch-row-bar";
         const fill = document.createElement("div"); fill.className = "batch-row-fill";
         bar.appendChild(fill);
         const stateText = document.createElement("span"); stateText.className = "batch-row-state";
-        row.append(name, bar, stateText);
-        node = { row, name, fill, stateText };
+        row.append(name, tag, bar, stateText);
+        node = { row, name, tag, fill, stateText };
         batchRowNodes.set(item.id, node);
         list.appendChild(row);
       }
       node.name.textContent = item.name;
       node.name.title = item.destination;
+      node.tag.hidden = item.isPhoto !== true;
+      if (item.isPhoto) node.tag.textContent = ts("batchExport.tagPhoto");
       node.fill.style.width = item.barWidth;
       // The reason lives in the tooltip: rows stay one line each so a fifty-clip
       // batch remains scannable.
@@ -1208,6 +1382,8 @@ video.addEventListener("timeupdate", () => { if (state.mode === "edit" && state.
   function closeBatchModal() {
     batchModal = null;
     batchOptions = null;
+    batchCatalog = [];
+    batchBadgePicker.close();
     for (const [, node] of batchRowNodes) node.row.remove();
     batchRowNodes.clear();
     const setupList = $("batch-setup-list");
@@ -1236,6 +1412,10 @@ video.addEventListener("timeupdate", () => { if (state.mode === "edit" && state.
       const row = document.createElement("div"); row.className = "batch-pick-row"; row.setAttribute("role", "listitem");
       const name = document.createElement("span"); name.className = "batch-pick-name"; name.textContent = clip.name; name.title = clip.name;
       row.appendChild(name);
+      if (clip.isPhoto) {
+        const tag = document.createElement("span"); tag.className = "batch-pick-tag"; tag.textContent = ts("batchExport.tagPhoto");
+        row.appendChild(tag);
+      }
       if (clip.showRestore) {
         const tag = document.createElement("span"); tag.className = "batch-pick-tag"; tag.textContent = ts("batchExport.tagRestore");
         row.appendChild(tag);
@@ -1243,10 +1423,51 @@ video.addEventListener("timeupdate", () => { if (state.mode === "edit" && state.
       list.appendChild(row);
     }
   }
+  function paintVideoSpec() {
+    if (!videoOptions || !videoOptionsState) return;
+    const model = videoOptionsState.view(videoOptions);
+    const resolution = $("batch-option-resolution");
+    if (resolution) {
+      resolution.replaceChildren();
+      for (const entry of model.resolutions) resolution.appendChild(new Option(ts(entry.labelKey), entry.value));
+      resolution.value = model.resolution;
+    }
+    const fps = $("batch-option-fps");
+    if (fps) {
+      fps.replaceChildren();
+      for (const entry of model.frameRates) fps.appendChild(new Option(ts(entry.labelKey), entry.value));
+      fps.value = model.fps;
+    }
+    const rate = $("batch-option-rate");
+    if (rate) {
+      rate.replaceChildren();
+      for (const entry of model.rateModes) rate.appendChild(new Option(ts(entry.labelKey), entry.value));
+      rate.value = model.rate;
+    }
+    const codec = $("batch-option-codec");
+    if (codec) {
+      codec.replaceChildren();
+      for (const entry of model.codecs) codec.appendChild(new Option(ts(entry.labelKey), entry.value));
+      codec.value = model.codec;
+    }
+    const bitrateRow = $("batch-bitrate-row");
+    if (bitrateRow) bitrateRow.hidden = !model.bitrateVisible;
+    const bitrate = $("batch-option-bitrate");
+    if (bitrate) bitrate.value = String(model.bitrateMbps);
+    const tenBit = $("batch-option-tenbit");
+    if (tenBit) { tenBit.checked = model.tenBit; tenBit.disabled = model.tenBitDisabled; }
+  }
+  function updateVideoOptions(mutate) {
+    if (!videoOptions || !videoOptionsState) return;
+    const next = mutate(videoOptions);
+    if (next === videoOptions) return;
+    videoOptions = next;
+    paintVideoSpec();
+  }
   function paintBatchSetup() {
     if (!batchOptions) return;
     const model = batchOptionsState.view(batchOptions);
-    $("batch-setup-headline").textContent = model.needsRestore ? ts("batchExport.needsRestore", { count: model.needsRestore }) : ts("batchExport.noRestore");
+    $("batch-setup-headline").textContent = ts(model.headlineKey, { count: model.restoreCount, model: ts(model.colorModeKey) });
     // Photos and unreadable entries are dropped before the dialog is built, so
     // the count has to own up to the gap or the list looks short for no reason.
     $("batch-setup-count").textContent = model.skipped
@@ -1254,7 +1475,8 @@ video.addEventListener("timeupdate", () => { if (state.mode === "edit" && state.
       : ts("batchExport.setupCount", { total: model.total });
     const destination = $("batch-setup-destination");
     if (destination) { destination.textContent = model.destination || ""; destination.title = model.destination || ""; }
-    $("batch-option-restore").checked = model.restore;
+    const colorMode = $("batch-option-color-mode");
+    if (colorMode) colorMode.value = model.colorMode;
     const watermarkBox = $("batch-option-watermark");
     watermarkBox.checked = model.watermarkEnabled;
     watermarkBox.disabled = model.watermarks.length === 0;
@@ -1264,14 +1486,16 @@ video.addEventListener("timeupdate", () => { if (state.mode === "edit" && state.
       // paint would close the dropdown while the user is choosing from it.
       if (select.dataset.signature !== model.watermarkSignature) {
         select.replaceChildren();
-        for (const entry of model.watermarks) select.appendChild(new Option(entry.name, entry.id));
+        for (const entry of model.watermarks) select.appendChild(new Option(entry.familyName + " " + badgePicker.variantLabel(entry.variant, ts), entry.id));
         select.dataset.signature = model.watermarkSignature;
       }
       select.disabled = !model.watermarkEnabled;
       select.value = model.watermarkId || "";
+      batchBadgePicker.refresh();
     }
     renderBatchSetupRows(model.clips);
     $("batch-setup-start").disabled = model.startDisabled;
+    paintVideoSpec();
   }
   // The setup sheet is built from the main process's own view of the selection
   // so the clips it marks D-Log are exactly the clips export will restore.
@@ -1284,6 +1508,7 @@ video.addEventListener("timeupdate", () => { if (state.mode === "edit" && state.
       const setup = await api.batchSetup({ assetIds: requested });
       if (!setup || !Array.isArray(setup.clips) || !setup.clips.length) { showError(ts("batchExport.nothingToExport"), false); return; }
       batchOptions = batchOptionsState.initialState({ clips: setup.clips, watermarks: setup.watermarks, destination: setup.destination, skipped: setup.skipped });
+      batchCatalog = Array.isArray(setup.watermarkCatalog) ? setup.watermarkCatalog : [];
       openBatchDialog("setup");
     } catch (e) {
       fail(e);
@@ -1297,7 +1522,7 @@ video.addEventListener("timeupdate", () => { if (state.mode === "edit" && state.
     const model = batchOptionsState.view(batchOptions);
     $("batch-setup-start").disabled = true;
     try {
-      const result = await api.exportBatch({ assetIds: [...batchIds], colorRestore: model.restore, watermark: model.watermark });
+      const result = await api.exportBatch({ assetIds: [...batchIds], colorMode: model.colorMode, watermark: model.watermark, videoSpec: videoOptionsState && videoOptions ? videoOptionsState.payload(videoOptions) : null });
       if (!result || result.canceled) return;
       if (!result.queued) { closeBatchModal(); showError(ts("batchExport.nothingToExport"), false); return; }
       batchModal = batchExportState.initialState({ batchId: result.batchId, destination: result.destination || "", items: result.items || [], skipped: result.skipped || 0 });
@@ -1325,7 +1550,21 @@ video.addEventListener("timeupdate", () => { if (state.mode === "edit" && state.
   // The inspector's library block drives the same selection as the floating bar,
   // so batch export is discoverable without first clicking a checkbox.
   $("library-export-selected") && $("library-export-selected").addEventListener("click", openBatchSetup);
-  $("library-select-all") && $("library-select-all").addEventListener("click", () => selectAllVisible());
+  // Select all: the list toolbar button, the inspector button and Ctrl/Cmd+A all
+  // drive the same toggle.
+  $("selection-all") && $("selection-all").addEventListener("click", () => toggleSelectAll());
+  $("library-select-all") && $("library-select-all").addEventListener("click", () => toggleSelectAll());
+  document.addEventListener("keydown", event => {
+    if (event.key !== "a" && event.key !== "A") return;
+    if (!event.ctrlKey && !event.metaKey) return;
+    // Only browse owns the list. In the editor a text field's own select-all has
+    // to win, and space/arrows already belong to the player.
+    if (state.mode !== "browse") return;
+    const target = event.target;
+    if (target && target.closest && target.closest("input, select, textarea, [contenteditable='true']")) return;
+    event.preventDefault();
+    toggleSelectAll();
+  });
   $("library-choose-destination") && $("library-choose-destination").addEventListener("click", async () => {
     try {
       const directory = await api.chooseExportLocation();
@@ -1338,9 +1577,15 @@ video.addEventListener("timeupdate", () => { if (state.mode === "edit" && state.
   });
   $("batch-setup-cancel") && $("batch-setup-cancel").addEventListener("click", closeBatchModal);
   $("batch-setup-start") && $("batch-setup-start").addEventListener("click", confirmBatchExport);
-  $("batch-option-restore") && $("batch-option-restore").addEventListener("change", event => updateBatchOptions(current => batchOptionsState.setRestore(current, event.target.checked)));
+  $("batch-option-color-mode") && $("batch-option-color-mode").addEventListener("change", event => updateBatchOptions(current => batchOptionsState.setColorMode(current, event.target.value)));
   $("batch-option-watermark") && $("batch-option-watermark").addEventListener("change", event => updateBatchOptions(current => batchOptionsState.setWatermarkEnabled(current, event.target.checked)));
   $("batch-option-watermark-id") && $("batch-option-watermark-id").addEventListener("change", event => updateBatchOptions(current => batchOptionsState.setWatermarkId(current, event.target.value)));
+  $("batch-option-resolution") && $("batch-option-resolution").addEventListener("change", event => updateVideoOptions(current => videoOptionsState.setResolution(current, event.target.value)));
+  $("batch-option-fps") && $("batch-option-fps").addEventListener("change", event => updateVideoOptions(current => videoOptionsState.setFps(current, event.target.value)));
+  $("batch-option-rate") && $("batch-option-rate").addEventListener("change", event => updateVideoOptions(current => videoOptionsState.setRate(current, event.target.value)));
+  $("batch-option-codec") && $("batch-option-codec").addEventListener("change", event => updateVideoOptions(current => videoOptionsState.setCodec(current, event.target.value)));
+  $("batch-option-bitrate") && $("batch-option-bitrate").addEventListener("change", event => updateVideoOptions(current => videoOptionsState.setBitrate(current, event.target.value)));
+  $("batch-option-tenbit") && $("batch-option-tenbit").addEventListener("change", event => updateVideoOptions(current => videoOptionsState.setTenBit(current, event.target.checked)));
   $("batch-modal-close") && $("batch-modal-close").addEventListener("click", closeBatchModal);
   $("batch-modal-cancel") && $("batch-modal-cancel").addEventListener("click", async () => {
     if (!batchModal || !batchModal.batchId) return;

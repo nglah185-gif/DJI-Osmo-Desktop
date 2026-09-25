@@ -17,7 +17,7 @@
 // pixel format is dictated by the output anyway.
 const WORKING_FORMAT = "yuv420p10le";
 
-async function buildFilterGraph({ graph, lutRegistry, styleRegistry, cacheRoot, workingFormat = WORKING_FORMAT, outputFormat = WORKING_FORMAT, inputPrefix = "", outputSuffix = "", lutEngine = "cpu" }) {
+async function buildFilterGraph({ graph, lutRegistry, styleRegistry, cacheRoot, workingFormat = WORKING_FORMAT, outputFormat = WORKING_FORMAT, inputPrefix = "", outputSuffix = "", lutEngine = "cpu", overlayFormat = null, videoWidth = null, outputHeight = null, outputWidth = null, outputFps = null }) {
   const filters = []; const inputs = []; let videoLabel = "[working_rgb]"; let inputIndex = 1; const generatedLuts = [];
   const source = graph.sourceTransform || { enabled: true };
   // inputPrefix is where the export's speed filter (setpts) goes: it has to act
@@ -88,7 +88,23 @@ async function buildFilterGraph({ graph, lutRegistry, styleRegistry, cacheRoot, 
     // canvas, which is always in bounds, rather than another asset's ink box.
     const ink = overlay.inkBox || (canvas ? { x: 0, y: 0, width: canvas.width, height: canvas.height } : OA4_INK_BOX);
     const centerYRatio = Number.isFinite(Number(overlay.centerYRatio)) ? Number(overlay.centerYRatio) : INK_CENTER_Y_RATIO;
-    const parts = inkOverlayFilters({ inputIndex, videoLabel, scale, opacity, centerYRatio, ink, canvas });
+    // Composite in the format the encoder actually consumes. Blending in the
+    // 10-bit working format made ffmpeg convert every 4K frame to RGB for the
+    // overlay and back, which measured +4.1s per 10s of 4K60 export; in the
+    // 8-bit encoder format the watermark costs nothing measurable. The trailing
+    // output format stage then becomes a no-op.
+    let overlayBase = videoLabel;
+    if (overlayFormat) {
+      filters.push(videoLabel + "format=" + overlayFormat + "[overlay_base_fmt]");
+      overlayBase = "[overlay_base_fmt]";
+    }
+    // A statically sized badge needs the true frame width. crop/rotate/flip
+    // change the frame before compositing, so those graphs keep the dynamic
+    // scale2ref path rather than sizing against the pre-geometry width.
+    const geometryActive = geometry.enabled !== false;
+    const cropBox = (geometryActive && geometry.crop) || {};
+    const geometryChangesFrame = !!(geometryActive && (Number(cropBox.left || 0) || Number(cropBox.top || 0) || Number(cropBox.right || 0) || Number(cropBox.bottom || 0) || Number(geometry.rotation || 0) || geometry.flipHorizontal || geometry.flipVertical));
+    const parts = inkOverlayFilters({ inputIndex, videoLabel: overlayBase, scale, opacity, centerYRatio, ink, canvas, videoWidth: geometryChangesFrame ? null : videoWidth });
     filters.push(parts.src);
     filters.push(parts.sized);
     filters.push(parts.composite);
@@ -104,6 +120,27 @@ async function buildFilterGraph({ graph, lutRegistry, styleRegistry, cacheRoot, 
     const previewHeight = Math.max(2, Math.floor(Number(previewSize.height) / 2) * 2);
     filters.push(videoLabel + "scale=" + previewWidth + ":" + previewHeight + ":force_original_aspect_ratio=decrease,pad=" + previewWidth + ":" + previewHeight + ":(ow-iw)/2:(oh-ih)/2:color=black[preview_scaled]");
     videoLabel = "[preview_scaled]";
+  }
+  // Output resolution and frame rate, when the export asked for something other
+  // than the source. Resolution is a height with an even, aspect-preserving
+  // width (-2); the scale runs after the watermark so the badge keeps the
+  // reference frame's geometry, and before the frame-rate filter so the scaler
+  // sees the source frame count rather than the resampled one.
+  const outHeight = Number(outputHeight);
+  const outWidth = Number(outputWidth);
+  if ((Number.isFinite(outHeight) && outHeight > 0) || (Number.isFinite(outWidth) && outWidth > 0)) {
+    const height = Number.isFinite(outHeight) && outHeight > 0 ? Math.max(2, Math.floor(outHeight / 2) * 2) : -2;
+    const width = Number.isFinite(outWidth) && outWidth > 0 ? Math.max(2, Math.floor(outWidth / 2) * 2) : -2;
+    filters.push(videoLabel + "scale=" + width + ":" + height + ":flags=lanczos[output_scaled]");
+    videoLabel = "[output_scaled]";
+  }
+  const outFps = Number(outputFps);
+  if (Number.isFinite(outFps) && outFps > 0) {
+    // fps= resamples by duplicating or dropping frames; -r as an output option
+    // would instead re-timestamp whatever the encoder emitted, which desyncs
+    // copy-mode audio and silently changes duration on VFR sources.
+    filters.push(videoLabel + "fps=fps=" + outFps + "[output_fps]");
+    videoLabel = "[output_fps]";
   }
   // The output format is the caller's decision, not the graph's. Preview
   // consumers read raw rgb24 over a pipe and must keep it; export hands frames

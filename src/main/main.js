@@ -23,6 +23,8 @@ const { scanLocalDirectory } = require("../local-library/local-scanner");
 const { expandSelectedFiles, key: localPathKey } = require("../local-library/selected-files");
 const { normalizePathList, addSource, removeSource, isPathInside, sourceSnapshot } = require("../local-library/source-config");
 const { ExportQueue } = require("../tasks/export-queue");
+const { normalizeVideoSpec } = require("../renderers/video-spec");
+const { exportJpeg, captureTimeFor, stampCaptureTime } = require("../renderers/jpeg-export");
 const { ConfigStore } = require("../settings/config-store");
 const { ThumbnailLocator } = require("../thumbnail/thumbnail-locator");
 const { spawn } = require("node:child_process");
@@ -79,6 +81,9 @@ const authorizedThumbnailPaths = new Map();
 const authorizedPosterPaths = new Map();
 const authorizedFallbackPaths = new Map();
 const authorizedOriginalPaths = new Map();
+// Badge artwork, so the picker can draw each watermark instead of asking the
+// user to choose between names alone.
+const authorizedWatermarkPaths = new Map();
 const thumbnailLocator = new ThumbnailLocator();
 const deviceProvider = new WindowsMassStorageDeviceProvider();
 const pipeline = new MediaPipeline({ deviceProvider, mediaAccess: new ReadOnlyMediaAccess(), mediaProbe: new FfprobeMediaProbe(), catalog, workspaceRoot });
@@ -102,31 +107,66 @@ function uniqueOutputPath(directory, fileName, used) {
   const stem = path.basename(fileName, extension) || "export";
   let candidate = path.join(directory, fileName);
   let counter = 1;
-  while (used.has(comparablePath(candidate))) candidate = path.join(directory, stem + " (" + (++counter) + ")" + extension);
+  // `used` covers the names this batch has already claimed, because two clips
+  // can legitimately share one. The filesystem check covers everything already
+  // in the folder, which matters more: the destination is where the user's other
+  // exports live, and an export must never replace a file that is already there.
+  // Measured before this check existed: a second batch run over the same clips
+  // silently replaced the first run's output.
+  while (used.has(comparablePath(candidate)) || fs.existsSync(candidate)) candidate = path.join(directory, stem + " (" + (++counter) + ")" + extension);
   used.add(comparablePath(candidate));
   return candidate;
 }
 
-// The clips a batch will actually export, and how many requested ids were
-// dropped (photos and unreadable sources). Shared by the setup sheet and the
+// The items a batch will actually export, and how many requested ids were
+// dropped because their source is unreadable. Shared by the setup sheet and the
 // export itself so the list the user confirms is the list that runs.
+//
+// Photos are included. They used to be filtered out here, which made the list's
+// "select all" a lie: it selected every row and then quietly exported only the
+// videos. A still takes its own path through the pipeline, but it is still an
+// export the user asked for.
 function selectBatchAssets(assetIds) {
   const ids = Array.isArray(assetIds) ? assetIds.filter(id => typeof id === "string") : [];
   const requested = ids.map(getAssetAny).filter(Boolean);
-  const assets = requested.filter(asset => asset.original && typeof asset.original.path === "string" && asset.mediaKind !== "photo");
+  const assets = requested.filter(asset => asset.original && typeof asset.original.path === "string");
   return { assets, skipped: requested.length - assets.length };
 }
 
-// The effect graph for one clip in an automatic batch. Restoration is per asset
-// because each camera family has its own Rec.709 transform; a Standard clip
-// resolves to "none" and therefore keeps the neutral graph and the fast copy
-// path. Watermarking is the caller's single decision for the whole batch.
-function batchAutoEditor(asset, { colorRestore = true, watermark = null } = {}) {
+// The colour answer for one clip in a batch. "auto" asks the shared detector; a
+// specific transform is the user's explicit choice, which exists because
+// detection can only read what the file carries -- a clip re-muxed or trimmed by
+// another tool can lose the metadata that names its camera, and the export would
+// then copy log footage without restoring it. Anything unrecognized falls back to
+// detection rather than reaching the graph builder.
+const BATCH_COLOR_MODES = new Set(["auto", "none", "action4", "action5pro", "action6", "pocket3", "pocket4", "pocket4p", "osmo-nano"]);
+function resolveBatchColorMode(value) {
+  const mode = String(value || "");
+  return BATCH_COLOR_MODES.has(mode) ? mode : "auto";
+}
+function batchAutoEditor(asset, { colorMode = "auto", watermark = null } = {}) {
+  const mode = resolveBatchColorMode(colorMode);
   return {
-    technicalTransform: colorRestore ? technicalTransformFor(asset) : "none",
+    technicalTransform: mode === "auto" ? technicalTransformFor(asset) : mode,
     creativeLook: "",
     watermark: watermark ? { ...watermark, enabled: true } : { enabled: false }
   };
+}
+
+// What the renderer is told about a badge. The path is kept in the main process
+// and authorized for the media protocol, so the picker draws the mark from a URL
+// without ever learning where the assets live.
+function watermarkChoice(entry) {
+  if (!entry) return null;
+  authorizedWatermarkPaths.set(entry.id, entry.path);
+  return { id: entry.id, family: entry.family, familyName: entry.familyName, variant: entry.variant, url: "dji-media://asset/watermark/" + encodeURIComponent(entry.id) };
+}
+// Every badge, grouped by device, for the picker's "all models" scope: detection
+// can only read what a file carries, and a badge is a cosmetic choice, so a
+// missing model must never be a dead end.
+function watermarkCatalog() {
+  if (!watermarkRegistry) return [];
+  return watermarkRegistry.catalog().map(group => ({ family: group.family, name: group.name, entries: group.entries.map(watermarkChoice).filter(Boolean) }));
 }
 
 // The renderer is not trusted to name a watermark asset. Anything that is not
@@ -147,7 +187,7 @@ function sanitizeBatchWatermark(value) {
 }
 
 function registerMediaProtocol() {
-  protocol.handle("dji-media", async request => { try { const url = new URL(request.url); const parts = url.pathname.split("/").filter(Boolean); const assetId = parts.pop(); let map = authorizedPreviewPaths; if (parts[0] === "thumbnail") map = authorizedThumbnailPaths; else if (parts[0] === "poster") map = authorizedPosterPaths; else if (parts[0] === "fallback") map = authorizedFallbackPaths; else if (parts[0] === "original") map = authorizedOriginalPaths; /* Only thumbnails are stored per size tier; every other route keys by id alone. */ const tier = parts[0] === "thumbnail" ? url.searchParams.get("w") : null; const key = assetId ? decodeURIComponent(assetId) + (tier ? "@" + tier : "") : null; const filePath = key ? map.get(key) || map.get(decodeURIComponent(assetId)) : null; if (!filePath) return new Response("Not found", { status: 404 }); return fileResponse(filePath, request); } catch { return new Response("Bad request", { status: 400 }); } });
+  protocol.handle("dji-media", async request => { try { const url = new URL(request.url); const parts = url.pathname.split("/").filter(Boolean); const assetId = parts.pop(); let map = authorizedPreviewPaths; if (parts[0] === "thumbnail") map = authorizedThumbnailPaths; else if (parts[0] === "poster") map = authorizedPosterPaths; else if (parts[0] === "fallback") map = authorizedFallbackPaths; else if (parts[0] === "original") map = authorizedOriginalPaths; else if (parts[0] === "watermark") map = authorizedWatermarkPaths; /* Only thumbnails are stored per size tier; every other route keys by id alone. */ const tier = parts[0] === "thumbnail" ? url.searchParams.get("w") : null; const key = assetId ? decodeURIComponent(assetId) + (tier ? "@" + tier : "") : null; const filePath = key ? map.get(key) || map.get(decodeURIComponent(assetId)) : null; if (!filePath) return new Response("Not found", { status: 404 }); return fileResponse(filePath, request); } catch { return new Response("Bad request", { status: 400 }); } });
 }
 
 async function scan() {
@@ -255,21 +295,41 @@ function validateExport(outputPath) {
 // other's half-written file into place, or delete it on failure. A monotonic
 // counter makes the name unique regardless of timing.
 let exportSequence = 0;
-async function exportAtomically(inputPath, outputPath, graph, clip, onProgress, signal = null) {
+async function exportAtomically(inputPath, outputPath, graph, clip, onProgress, signal = null, videoSpec = null) {
   // Validate the final path before creating a temporary export. Checking only
   // the temporary path lets Export As target the source and later delete it.
   assertSafeExportTarget(inputPath, outputPath);
   const temporaryPath = path.join(path.dirname(outputPath), ".dji-export-" + process.pid + "-" + (++exportSequence) + "-" + Date.now() + ".mp4");
   try {
-    const exported = await colorRenderService.exportOriginal(inputPath, temporaryPath, graph, null, null, clip, onProgress, signal);
+    const exported = await colorRenderService.exportOriginal(inputPath, temporaryPath, graph, null, null, clip, onProgress, signal, { videoSpec });
     const validation = await validateExport(temporaryPath);
     await fs.promises.rm(outputPath, { force: true });
     await fs.promises.rename(temporaryPath, outputPath);
+    // Explorer's date column is the file's modification time, so without this a
+    // finished export looks like it was shot today and sorts away from the
+    // original. The camera's own EXIF/name carries the real capture time.
+    stampCaptureTime(outputPath, captureTimeFor(inputPath, path.basename(outputPath)));
     return { ...exported, outputPath, validation };
   } catch (error) {
     await fs.promises.rm(temporaryPath, { force: true }).catch(() => {});
     throw error;
   }
+}
+
+// A still export reuses the one implementation the unattended card script uses,
+// so a batch run here and a script run there produce the same bytes. A still is
+// single-frame work, so it goes straight from "running" to "done".
+async function exportJpegAsset(asset, outputPath, watermark, onProgress, signal) {
+  if (typeof onProgress === "function") onProgress(0);
+  const result = await exportJpeg({
+    ffmpegPath: process.env.FFMPEG_PATH || "ffmpeg",
+    inputPath: asset.original.path,
+    outputPath,
+    watermarkPath: watermark ? watermark.path : null,
+    inkBox: watermark ? watermark.inkBox : null,
+    signal
+  });
+  return { outputPath, validation: null, bytes: result.bytes, encoder: watermark ? "mjpeg-overlay" : "jpeg-copy" };
 }
 
 if (singleInstanceLock) app.on("second-instance", () => {
@@ -332,7 +392,7 @@ if (singleInstanceLock) app.whenReady().then(() => {
     return null;
   });
   ipcMain.handle("media:poster-url", async (_event, assetId) => { if (typeof assetId !== "string") return null; const asset = getAssetAny(assetId); if (!asset) return null; const resolved = previewResolver.resolve(asset); try { const found = thumbnailLocator.locate(asset); const posterRoot = path.join(app.getPath("userData"), "cache", "posters"); const poster = await ensurePoster({ assetId, previewPath: resolved.status === "READY" ? resolved.path : null, originalPath: asset.original.path, scrPath: found.scr, posterRoot }); if (poster) { authorizedPosterPaths.set(assetId, poster); return "dji-media://asset/poster/" + encodeURIComponent(assetId); } } catch (error) { console.error("Poster failed:", error); } return null; });
-  ipcMain.handle("editor:open", (_event, assetId) => { const asset = getAssetAny(assetId); if (!asset) throw new Error("Asset unavailable"); const watermarks = watermarkRegistry ? watermarkRegistry.forCameraModel(asset.cameraModel) : []; const watermark = watermarks[0] || (watermarkRegistry && watermarkRegistry.get("action4.official.oa4")); return { asset, clip: createTimelineClip(asset), colorMode: "UNKNOWN", looks: [...colorPresets.keys()], watermark, watermarks }; });
+  ipcMain.handle("editor:open", (_event, assetId) => { const asset = getAssetAny(assetId); if (!asset) throw new Error("Asset unavailable"); const matched = watermarkRegistry ? watermarkRegistry.forCameraModel(asset.cameraModel) : []; const fallback = watermarkChoice(watermarkRegistry && watermarkRegistry.get("action4.official.oa4")); /* An unidentified model still gets the whole set of the default device -- one lone badge would hide the rest of the family. */ const own = matched.length ? matched : (watermarkRegistry ? watermarkRegistry.forCameraModel("DJI Osmo Action 4") : []); const watermarks = own.map(watermarkChoice).filter(Boolean); return { asset, clip: createTimelineClip(asset), colorMode: "UNKNOWN", looks: [...colorPresets.keys()], watermark: watermarks[0] || fallback, watermarks: watermarks.length ? watermarks : (fallback ? [fallback] : []), watermarkCatalog: watermarkCatalog() }; });
   ipcMain.handle("editor:preview-frame", async (_event, args = {}) => { const asset = getAssetAny(args.assetId); if (!asset) throw new Error("Asset unavailable"); const resolved = previewResolver.resolve(asset); let sourcePath = resolved.status === "READY" ? resolved.path : null; if (!sourcePath) sourcePath = asset.original && asset.original.path ? asset.original.path : null; if (!sourcePath) sourcePath = await ensureFallbackProxy({ assetId: asset.id, originalPath: asset.original.path, cacheRoot: path.join(app.getPath("userData"), "cache", "fallbacks") }); if (!sourcePath) throw new Error("Edit preview requires an LRF companion or a decodable original"); const graph = await graphForEditor(args.editor); const seconds = Number(args.timelineSeconds || 0) * Number(args.editor?.clip?.playbackRate || 1) + Number(args.editor?.clip?.sourceInUs || 0) / 1000000; return colorRenderService.renderPreviewFrame(sourcePath, seconds, graph, 1280, 720); });
   function sourceFrameRate(asset, sourcePath) {
     const previewPath = asset && asset.preview && asset.preview !== "UNKNOWN" && asset.preview.path;
@@ -364,28 +424,22 @@ ipcMain.handle("editor:preview-pause", (_event, args = {}) => previewStreamer.pa
   ipcMain.handle("library:batch-setup", async (_event, args = {}) => {
     const { assets, skipped } = selectBatchAssets(args.assetIds);
     const destination = settingsStore.get("exportLocation") || app.getPath("videos");
-    const watermarks = [];
-    const seen = new Set();
-    const addWatermark = entry => {
-      if (!entry || seen.has(entry.id)) return;
-      seen.add(entry.id);
-      watermarks.push({ id: entry.id, name: entry.name });
-    };
-    for (const asset of assets) {
-      if (!watermarkRegistry) break;
-      for (const entry of watermarkRegistry.forCameraModel(asset.cameraModel)) addWatermark(entry);
-    }
-    // A camera family with no matching badge still offers the default, which is
-    // what the single-clip editor falls back to as well.
-    if (!watermarks.length && watermarkRegistry) addWatermark(watermarkRegistry.get("action4.official.oa4"));
+    const watermarks = (watermarkRegistry ? watermarkRegistry.forCameraModels(assets.map(asset => asset.cameraModel)) : []).map(watermarkChoice).filter(Boolean);
+    // A selection whose cameras this build does not know still offers the
+    // default badge, and the picker can browse every other device from there.
+    if (!watermarks.length) { /* Unidentified footage gets the default device's whole set, not one badge. */ for (const entry of (watermarkRegistry ? watermarkRegistry.forCameraModel("DJI Osmo Action 4") : [])) { const choice = watermarkChoice(entry); if (choice) watermarks.push(choice); } const fallback = watermarkChoice(watermarkRegistry && watermarkRegistry.get("action4.official.oa4")); if (!watermarks.length && fallback) watermarks.push(fallback); }
     return {
       destination,
       skipped,
       watermarks,
+      watermarkCatalog: watermarkCatalog(),
       clips: assets.map(asset => ({
         assetId: asset.id,
         name: asset.original.name,
-        needsRestore: technicalTransformFor(asset) !== "none"
+        kind: asset.mediaKind === "photo" ? "photo" : "video",
+        // A still has no colour pipeline to restore, so only clips can carry the
+        // restoration tag.
+        needsRestore: asset.mediaKind !== "photo" && technicalTransformFor(asset) !== "none"
       }))
     };
   });
@@ -406,29 +460,56 @@ ipcMain.handle("editor:preview-pause", (_event, args = {}) => previewStreamer.pa
     const { assets, skipped } = selectBatchAssets(args.assetIds);
     if (!assets.length) return { canceled: false, batchId: null, queued: 0, skipped, destination: "" };
     const destination = settingsStore.get("exportLocation") || app.getPath("videos");
-    const colorRestore = args.colorRestore !== false;
+    const colorMode = resolveBatchColorMode(args.colorMode);
     const watermark = sanitizeBatchWatermark(args.watermark);
+    // Video specification (resolution / frame rate / bitrate / 10-bit) applies
+    // to every clip in the batch. Still images ignore it; a JPEG has no frame
+    // rate or bit depth to choose.
+    const videoSpec = normalizeVideoSpec(args.videoSpec);
 
     // Photos and stream-copy targets still need a unique name each, and a clip
     // must never be exported on top of its own source.
     const used = new Set(assets.map(asset => comparablePath(asset.original.path)));
     const batchId = "batch-" + Date.now() + "-" + Math.random().toString(36).slice(2, 8);
     const queued = [];
+    // The watermark's ink box is measured once for the whole batch: it is cached
+    // by content hash, and a photo and a clip must land the badge on the same
+    // visual line.
+    let badge = null;
+    let inkBox = null;
+    if (watermark) {
+      badge = watermarkRegistry.get(watermark.id);
+      if (badge) inkBox = await watermarkRegistry.ensureInkBox(badge.id);
+    }
     for (const asset of assets) {
       const outputPath = uniqueOutputPath(destination, asset.original.name, used);
       const itemId = batchId + ":" + asset.id;
+      // A still takes its own path: one overlay, one JPEG encode, or a plain copy
+      // when no watermark was asked for.
+      if (asset.mediaKind === "photo") {
+        queued.push({ itemId, assetId: asset.id, name: asset.original.name, outputPath, kind: "photo" });
+        exportQueue.add({
+          id: itemId,
+          batchId,
+          assetId: asset.id,
+          label: asset.original.name,
+          destination: outputPath,
+          run: ({ signal, onProgress }) => exportJpegAsset(asset, outputPath, badge && inkBox ? { path: badge.path, inkBox } : null, onProgress, signal)
+        });
+        continue;
+      }
       // Graphs are built per asset because the transform differs by camera.
       // Building one is cheap and does no I/O until the watermark ink box has to
       // be measured, which is cached by content hash across the batch.
-      const graph = await graphForEditor(batchAutoEditor(asset, { colorRestore, watermark }));
-      queued.push({ itemId, assetId: asset.id, name: asset.original.name, outputPath });
+      const graph = await graphForEditor(batchAutoEditor(asset, { colorMode, watermark }));
+      queued.push({ itemId, assetId: asset.id, name: asset.original.name, outputPath, kind: "video" });
       exportQueue.add({
         id: itemId,
         batchId,
         assetId: asset.id,
         label: asset.original.name,
         destination: outputPath,
-        run: ({ signal, onProgress }) => exportAtomically(asset.original.path, outputPath, graph, null, pct => onProgress(pct), signal)
+        run: ({ signal, onProgress }) => exportAtomically(asset.original.path, outputPath, graph, null, pct => onProgress(pct), signal, videoSpec)
       });
     }
     return { canceled: false, batchId, queued: queued.length, skipped, destination, items: queued };
