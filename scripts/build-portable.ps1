@@ -29,6 +29,7 @@ Remove-Item -LiteralPath (Join-Path $target "resources\default_app.asar") -Force
 New-Item -ItemType Directory -Force -Path $appTarget | Out-Null
 Copy-Item -LiteralPath (Join-Path $projectRoot "package.json") -Destination $appTarget
 Copy-Item -LiteralPath (Join-Path $projectRoot "src") -Destination $appTarget -Recurse
+Copy-Item -LiteralPath (Join-Path $projectRoot "assets") -Destination $appTarget -Recurse
 Copy-Item -LiteralPath (Join-Path $workspaceRoot "cube&luts") -Destination (Join-Path $target "resources") -Recurse
 $extraLutRoot = Join-Path $workspaceRoot "lut&log"
 if (Test-Path -LiteralPath $extraLutRoot) {
@@ -47,6 +48,18 @@ Copy-Item -LiteralPath (Join-Path $localBin "ffprobe.exe") -Destination $binTarg
 $electronExe = Join-Path $target "electron.exe"
 $appExe = Join-Path $target "DJI Osmo Desktop.exe"
 Move-Item -LiteralPath $electronExe -Destination $appExe
+
+# The runtime shows the icon from assets/, but the file in Explorer carries
+# whatever the executable was built with -- Electron's own. rcedit rewrites the
+# resource section, and with it the name Windows shows in the taskbar tooltip.
+$rcedit = Join-Path $projectRoot "node_modules\rcedit\bin\rcedit-x64.exe"
+$iconPath = Join-Path $projectRoot "assets\app-icon.ico"
+if ((Test-Path $rcedit) -and (Test-Path $iconPath)) {
+  & $rcedit $appExe --set-icon $iconPath --set-version-string "ProductName" "DJI Osmo Desktop" --set-version-string "FileDescription" "DJI Osmo Desktop" --set-version-string "CompanyName" "DJI Osmo Desktop" --set-file-version $version --set-product-version $version | Out-Null
+  Write-Output "icon: $iconPath applied to the executable"
+} else {
+  Write-Warning "rcedit or the icon is missing; the executable keeps Electron's icon."
+}
 
 @"
 DJI Osmo Desktop $version - portable build

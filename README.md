@@ -110,6 +110,16 @@ npm run test:hotplug       # device hotplug regression
 npm run validate:phase2    # LUT equivalence + golden frame validation
 ```
 
+The application icon is generated rather than drawn by hand — the mark is one
+SVG in `scripts/make-app-icon.js`, rasterised through Electron's canvas into
+`assets/app-icon.png` and a multi-size `assets/app-icon.ico`, which the window
+and the packaged executable both use:
+
+```powershell
+node_modules\electron\dist\electron.exe scripts\make-app-icon.js
+npm run package:portable   # also stamps the icon onto the executable
+```
+
 UI probes run against a *running* app over the DevTools protocol, so start the
 app with `--remote-debugging-port=9222` first:
 

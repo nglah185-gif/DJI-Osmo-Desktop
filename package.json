@@ -14,5 +14,8 @@
     "validate:phase2": "node scripts/lut-equivalence.js && node scripts/golden-frame-validation.js",
     "package:portable": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-portable.ps1"
   },
-  "devDependencies": { "electron": "^32.2.0" }
+  "devDependencies": {
+    "electron": "^32.2.0",
+    "rcedit": "^5.0.2"
+  }
 }
