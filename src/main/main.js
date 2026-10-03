@@ -293,19 +293,102 @@ function validateExport(outputPath) {
     });
   });
 }
+// ---- Naming, copyright and backup -----------------------------------------
+const renameRules = require("../renderer/rename-rules");
+
+function renameSettings() { return renameRules.initialState(settingsStore ? settingsStore.get("renameRules") : null); }
+function copyrightSettings() { const value = (settingsStore && settingsStore.get("copyright")) || {}; return value && value.enabled === true ? value : null; }
+function backupSettings() { const value = (settingsStore && settingsStore.get("backup")) || {}; return value && value.enabled === true && value.location ? value : null; }
+function exportPreferences() { return (settingsStore && settingsStore.get("exportPrefs")) || {}; }
+
+// Everything a name can be built from. A target spec wins over the source when
+// it changes the picture: a clip exported to 1080p must not be named 4K.
+function renameContextFor(asset, { spec = null, index = 1, kind = null, extension = "" } = {}) {
+  const probe = (asset.original && asset.original.probe) || {};
+  const specHeight = spec && spec.resolution && spec.resolution !== "source" ? Number(spec.resolution) : 0;
+  const specFps = spec && spec.fps && spec.fps !== "source" ? Number(spec.fps) : 0;
+  return {
+    name: path.basename(asset.original.name, path.extname(asset.original.name)),
+    date: captureTimeFor(asset.original.path, asset.original.name),
+    model: asset.cameraModel,
+    colorMode: asset.djiColorMode,
+    tenBit: !!(spec && spec.tenBit),
+    height: specHeight || Number(probe.height) || 0,
+    fps: specFps || Number(probe.frameRate) || 0,
+    kind: kind || asset.mediaKind || null,
+    index,
+    extension
+  };
+}
+
+// Null while naming is switched off, so the caller keeps the shipped
+// "<name>.phase4.mp4" behaviour exactly.
+function renamedExportPath(asset, { spec = null, index = 1, kind = null, extension = ".mp4", directory }) {
+  const rules = renameSettings();
+  if (!rules.enabled) return null;
+  const base = renameRules.buildName(rules, renameContextFor(asset, { spec, index, kind, extension }));
+  return { base, path: uniqueOutputPath(directory, base + extension, new Set()) };
+}
+
+// ffmpeg reads these as container metadata: artist, copyright and a comment.
+function copyrightArgs() {
+  const value = copyrightSettings();
+  if (!value) return null;
+  const metadata = {};
+  if (value.artist) metadata.artist = String(value.artist);
+  if (value.copyright) metadata.copyright = String(value.copyright);
+  if (value.comment) metadata.comment = String(value.comment);
+  return Object.keys(metadata).length ? metadata : null;
+}
+
+async function fileLooksIdentical(sourcePath, targetPath) {
+  try {
+    const [source, target] = await Promise.all([fs.promises.stat(sourcePath), fs.promises.stat(targetPath)]);
+    return source.size === target.size && Math.abs(source.mtimeMs - target.mtimeMs) < 2000;
+  } catch { return false; }
+}
+
+// The backup side of a transfer: the camera file is copied to its own folder
+// under the same naming rules. Same name and identical information means skip;
+// a different file with that name is kept alongside, never overwritten.
+async function backupOriginal(asset, { spec = null, index = 1, rules = null } = {}) {
+  const settings = backupSettings();
+  if (!settings) return null;
+  const destination = settings.subfolder ? path.join(settings.location, String(settings.subfolder)) : settings.location;
+  await fs.promises.mkdir(destination, { recursive: true });
+  // The rules are passed in rather than read here: a transfer must use one
+  // naming decision from start to finish, even if the settings change while a
+  // long export is still running.
+  const naming = rules || renameSettings();
+  const extension = path.extname(asset.original.name) || ".bin";
+  // Without a template the backup keeps the camera's own name.
+  const template = naming.enabled ? naming : { ...naming, enabled: true, prefix: "original", pieces: [], suffix: "none" };
+  const base = renameRules.buildName(template, renameContextFor(asset, { spec, index, kind: asset.mediaKind, extension }));
+  const candidate = path.join(destination, base + extension);
+  if (await fileLooksIdentical(asset.original.path, candidate)) return { path: candidate, skipped: true };
+  const target = fs.existsSync(candidate) ? uniqueOutputPath(destination, base + extension, new Set()) : candidate;
+  await fs.promises.copyFile(asset.original.path, target);
+  return { path: target, skipped: false };
+}
+
+async function revealExport(target) {
+  if (exportPreferences().openFolder !== true || !target) return;
+  try { await shell.openPath(path.dirname(target)); } catch { /* the exported file matters more than the window */ }
+}
+
 // Batch exports run several of these against the same destination directory.
 // pid+Date.now() is millisecond resolution, so two exports starting in the same
 // tick produced the SAME temporary name: one export would then rename the
 // other's half-written file into place, or delete it on failure. A monotonic
 // counter makes the name unique regardless of timing.
 let exportSequence = 0;
-async function exportAtomically(inputPath, outputPath, graph, clip, onProgress, signal = null, videoSpec = null) {
+async function exportAtomically(inputPath, outputPath, graph, clip, onProgress, signal = null, videoSpec = null, metadata = null) {
   // Validate the final path before creating a temporary export. Checking only
   // the temporary path lets Export As target the source and later delete it.
   assertSafeExportTarget(inputPath, outputPath);
   const temporaryPath = path.join(path.dirname(outputPath), ".dji-export-" + process.pid + "-" + (++exportSequence) + "-" + Date.now() + ".mp4");
   try {
-    const exported = await colorRenderService.exportOriginal(inputPath, temporaryPath, graph, null, null, clip, onProgress, signal, { videoSpec });
+    const exported = await colorRenderService.exportOriginal(inputPath, temporaryPath, graph, null, null, clip, onProgress, signal, { videoSpec, metadata });
     const validation = await validateExport(temporaryPath);
     await fs.promises.rm(outputPath, { force: true });
     await fs.promises.rename(temporaryPath, outputPath);
@@ -323,7 +406,7 @@ async function exportAtomically(inputPath, outputPath, graph, clip, onProgress, 
 // A still export reuses the one implementation the unattended card script uses,
 // so a batch run here and a script run there produce the same bytes. A still is
 // single-frame work, so it goes straight from "running" to "done".
-async function exportJpegAsset(asset, outputPath, watermark, onProgress, signal) {
+async function exportJpegAsset(asset, outputPath, watermark, onProgress, signal, metadata = null) {
   if (typeof onProgress === "function") onProgress(0);
   const result = await exportJpeg({
     ffmpegPath: process.env.FFMPEG_PATH || "ffmpeg",
@@ -331,6 +414,7 @@ async function exportJpegAsset(asset, outputPath, watermark, onProgress, signal)
     outputPath,
     watermarkPath: watermark ? watermark.path : null,
     inkBox: watermark ? watermark.inkBox : null,
+    metadata,
     signal
   });
   return { outputPath, validation: null, bytes: result.bytes, encoder: watermark ? "mjpeg-overlay" : "jpeg-copy" };
@@ -344,7 +428,7 @@ if (singleInstanceLock) app.on("second-instance", () => {
 });
 
 if (singleInstanceLock) app.whenReady().then(() => {
-  settingsStore = new ConfigStore({ filePath: path.join(app.getPath("userData"), "config.json"), defaults: { language: "en", exportLocation: app.getPath("videos"), localRoots: [], localFiles: [] } });
+  settingsStore = new ConfigStore({ filePath: path.join(app.getPath("userData"), "config.json"), defaults: { language: "en", exportLocation: app.getPath("videos"), localRoots: [], localFiles: [], renameRules: {}, backup: { enabled: false, location: "", subfolder: "" }, copyright: { enabled: false, artist: "", copyright: "", comment: "" }, exportPrefs: { onlyNew: false, openFolder: false } } });
   refreshLocalLibrary();
   watermarkRegistry = createWatermarkRegistry(workspaceRoot, { cacheRoot: path.join(app.getPath("userData"), "watermark-ink") });
   const previewLutRegistry = createOfficialLutRegistry(workspaceRoot);
@@ -363,8 +447,9 @@ if (singleInstanceLock) app.whenReady().then(() => {
   ipcMain.handle("library:refresh", () => refreshLocalLibrary());
   ipcMain.handle("library:sources", () => sourceSnapshot(settingsStore.data));
   ipcMain.handle("library:remove-source", async (_event, source = {}) => { const key = source.kind === "folder" ? "localRoots" : source.kind === "file" ? "localFiles" : null; if (!key || typeof source.path !== "string") throw new Error("Invalid local source"); settingsStore.set(key, removeSource(settingsStore.get(key), source.path)); const snapshot = await refreshLocalLibrary(); return { snapshot, sources: sourceSnapshot(settingsStore.data) }; });
+  ipcMain.handle("settings:choose-folder", async () => { const picked = await dialog.showOpenDialog({ properties: ["openDirectory", "createDirectory"] }); return picked.canceled || !picked.filePaths.length ? null : picked.filePaths[0]; });
   ipcMain.handle("settings:get", () => settingsStore.data);
-  ipcMain.handle("settings:set", (_event, patch) => { patch = patch || {}; for (const key of ["language", "exportLocation"]) if (patch[key] !== undefined) settingsStore.set(key, patch[key]); return settingsStore.data; });
+  ipcMain.handle("settings:set", (_event, patch) => { patch = patch || {}; for (const key of ["language", "exportLocation", "renameRules", "backup", "copyright", "exportPrefs"]) if (patch[key] !== undefined) settingsStore.set(key, patch[key]); return settingsStore.data; });
   ipcMain.handle("settings:choose-export-location", async () => { const picked = await dialog.showOpenDialog({ properties: ["openDirectory", "createDirectory"] }); if (picked.canceled || !picked.filePaths.length) return settingsStore.get("exportLocation") || ""; settingsStore.set("exportLocation", picked.filePaths[0]); return picked.filePaths[0]; });
   ipcMain.handle("media:preview-url", async (_event, assetId) => { if (typeof assetId !== "string") return null; const asset = getAssetAny(assetId); if (!asset) return null; if (asset.mediaKind === "photo") { authorizedOriginalPaths.set(assetId, asset.original.path); return { url: "dji-media://asset/original/" + encodeURIComponent(assetId), sourceType: "PHOTO" }; } const resolved = previewResolver.resolve(asset); if (resolved.status === "READY") { authorizedPreviewPaths.set(assetId, resolved.path); return { url: "dji-media://asset/" + encodeURIComponent(assetId), sourceType: "LRF_PROXY" }; } authorizedOriginalPaths.set(assetId, asset.original.path); return { url: "dji-media://asset/original/" + encodeURIComponent(assetId), sourceType: "ORIGINAL" }; });
   ipcMain.handle("media:preview-fallback", async (_event, assetId) => { if (typeof assetId !== "string") return null; const asset = getAssetAny(assetId); if (!asset) return null; const durationSeconds = Number(asset.original && asset.original.probe && asset.original.probe.duration) || 0; const sendProgress = pct => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send("media:preview-progress", { assetId, pct }); }; try { const proxy = await ensureFallbackProxy({ assetId, originalPath: asset.original.path, cacheRoot: path.join(app.getPath("userData"), "cache", "fallbacks"), durationSeconds, onProgress: pct => { sendProgress(pct); } }); if (proxy) { authorizedFallbackPaths.set(assetId, proxy); sendProgress(100); return { url: "dji-media://asset/fallback/" + encodeURIComponent(assetId), sourceType: "ORIGINAL_FALLBACK" }; } } catch (error) { console.error("Fallback failed:", error); } return null; });
@@ -417,9 +502,33 @@ if (singleInstanceLock) app.whenReady().then(() => {
 ipcMain.handle("editor:preview-pause", (_event, args = {}) => previewStreamer.pause(args.assetId));
   ipcMain.handle("editor:preview-resume", async (_event, args = {}) => previewStreamer.resume(args.assetId, args.timelineSeconds));
   ipcMain.handle("editor:preview-stop", async (_event, args = {}) => { cancelFallbackProxy(args.assetId); return previewStreamer.stop(args.assetId); });
-  async function runExportIpc(event, args, choosePath) { const asset = getAssetAny(args.assetId); if (!asset) throw new Error("Asset unavailable"); const outputPath = await choosePath(asset); if (!outputPath) return { canceled: true }; const controller = new AbortController(); activeExports.add(controller); if (!event.sender.isDestroyed()) event.sender.send("export:progress", { assetId: asset.id, destination: outputPath }); const onProgress = pct => { if (!event.sender.isDestroyed()) event.sender.send("export:progress", { assetId: asset.id, pct }); }; try { return await exportAtomically(asset.original.path, outputPath, await graphForEditor(args.editor), args.editor.clip, onProgress, controller.signal, normalizeVideoSpec(args.videoSpec)); } finally { activeExports.delete(controller); } }
-  ipcMain.handle("editor:export", (_event, args = {}) => runExportIpc(_event, args, asset => { const exportDir = settingsStore.get("exportLocation") || app.getPath("videos"); return colorRenderService.defaultExportPath(asset.original.name, "phase4", exportDir); }));
-  ipcMain.handle("editor:export-as", (_event, args = {}) => runExportIpc(_event, args, async asset => { const picked = await dialog.showSaveDialog({ defaultPath: path.join(settingsStore.get("exportLocation") || app.getPath("videos"), path.basename(asset.original.name, path.extname(asset.original.name)) + ".phase4.mp4"), filters: [{ name: "MP4", extensions: ["mp4"] }] }); return picked.canceled || !picked.filePath ? null : picked.filePath; }));
+  const exportDirectory = () => settingsStore.get("exportLocation") || app.getPath("videos");
+  function instanceExportPath(asset, spec, extension) {
+    return renamedExportPath(asset, { spec, index: 1, kind: asset.mediaKind === "photo" ? "photo" : "video", extension, directory: exportDirectory() });
+  }
+  async function runExportIpc(event, args, choosePath, { useRename = true } = {}) {
+    const asset = getAssetAny(args.assetId);
+    if (!asset) throw new Error("Asset unavailable");
+    const spec = normalizeVideoSpec(args.videoSpec);
+    const extension = asset.mediaKind === "photo" ? path.extname(asset.original.name) || ".jpg" : ".mp4";
+    const renamed = useRename ? instanceExportPath(asset, spec, extension) : null;
+    // "Only new files": an export that is already on disk is left alone.
+    if (renamed && exportPreferences().onlyNew === true && fs.existsSync(renamed.path)) return { canceled: false, skipped: true, outputPath: renamed.path };
+    const outputPath = renamed ? renamed.path : await choosePath(asset);
+    if (!outputPath) return { canceled: true };
+    const controller = new AbortController();
+    activeExports.add(controller);
+    if (!event.sender.isDestroyed()) event.sender.send("export:progress", { assetId: asset.id, destination: outputPath });
+    const onProgress = pct => { if (!event.sender.isDestroyed()) event.sender.send("export:progress", { assetId: asset.id, pct }); };
+    try {
+      const exported = await exportAtomically(asset.original.path, outputPath, await graphForEditor(args.editor), args.editor.clip, onProgress, controller.signal, spec, copyrightArgs());
+      const backup = await backupOriginal(asset, { spec, index: 1, rules: renameSettings() });
+      await revealExport(outputPath);
+      return { ...exported, backup };
+    } finally { activeExports.delete(controller); }
+  }
+  ipcMain.handle("editor:export", (_event, args = {}) => runExportIpc(_event, args, asset => { const exportDir = settingsStore.get("exportLocation") || app.getPath("videos"); return colorRenderService.defaultExportPath(asset.original.name, "phase4", exportDir); }, { useRename: true }));
+  ipcMain.handle("editor:export-as", (_event, args = {}) => runExportIpc(_event, args, async asset => { const picked = await dialog.showSaveDialog({ defaultPath: path.join(settingsStore.get("exportLocation") || app.getPath("videos"), path.basename(asset.original.name, path.extname(asset.original.name)) + ".phase4.mp4"), filters: [{ name: "MP4", extensions: ["mp4"] }] }); return picked.canceled || !picked.filePath ? null : picked.filePath; }, { useRename: false }));
   ipcMain.handle("editor:export-cancel", () => { for (const controller of activeExports) controller.abort(); return { canceled: activeExports.size > 0 }; });
   // Fills the batch setup sheet before anything is queued. Detection happens
   // here rather than in the renderer so the clips the sheet calls D-Log are
@@ -485,8 +594,21 @@ ipcMain.handle("editor:preview-pause", (_event, args = {}) => previewStreamer.pa
       badge = watermarkRegistry.get(watermark.id);
       if (badge) inkBox = await watermarkRegistry.ensureInkBox(badge.id);
     }
+    let batchIndex = 0;
+    let alreadyExported = 0;
+    // One naming decision for the whole batch.
+    const rules = renameSettings();
     for (const asset of assets) {
-      const outputPath = uniqueOutputPath(destination, asset.original.name, used);
+      const index = ++batchIndex;
+      const extension = asset.mediaKind === "photo" ? path.extname(asset.original.name) || ".jpg" : ".mp4";
+      const renamed = renamedExportPath(asset, { spec: videoSpec, index, kind: asset.mediaKind === "photo" ? "photo" : "video", extension, directory: destination });
+      // "Only new files" applies to a batch the same way a transfer tool means
+      // it: an export that is already on disk is left alone instead of doubled.
+      if (renamed && exportPreferences().onlyNew === true && fs.existsSync(renamed.path)) {
+        alreadyExported += 1;
+        continue;
+      }
+      const outputPath = renamed ? renamed.path : uniqueOutputPath(destination, asset.original.name, used);
       const itemId = batchId + ":" + asset.id;
       // A still takes its own path: one overlay, one JPEG encode, or a plain copy
       // when no watermark was asked for.
@@ -498,7 +620,11 @@ ipcMain.handle("editor:preview-pause", (_event, args = {}) => previewStreamer.pa
           assetId: asset.id,
           label: asset.original.name,
           destination: outputPath,
-          run: ({ signal, onProgress }) => exportJpegAsset(asset, outputPath, badge && inkBox ? { path: badge.path, inkBox } : null, onProgress, signal)
+          run: async ({ signal, onProgress }) => {
+            const result = await exportJpegAsset(asset, outputPath, badge && inkBox ? { path: badge.path, inkBox } : null, onProgress, signal, copyrightArgs());
+            result.backup = await backupOriginal(asset, { spec: videoSpec, index, rules });
+            return result;
+          }
         });
         continue;
       }
@@ -513,10 +639,14 @@ ipcMain.handle("editor:preview-pause", (_event, args = {}) => previewStreamer.pa
         assetId: asset.id,
         label: asset.original.name,
         destination: outputPath,
-        run: ({ signal, onProgress }) => exportAtomically(asset.original.path, outputPath, graph, null, pct => onProgress(pct), signal, videoSpec)
+        run: async ({ signal, onProgress }) => {
+          const result = await exportAtomically(asset.original.path, outputPath, graph, null, pct => onProgress(pct), signal, videoSpec, copyrightArgs());
+          result.backup = await backupOriginal(asset, { spec: videoSpec, index, rules });
+          return result;
+        }
       });
     }
-    return { canceled: false, batchId, queued: queued.length, skipped, destination, items: queued };
+    return { canceled: false, batchId, queued: queued.length, skipped, alreadyExported, destination, items: queued };
   });
   // Cancel one batch item, or a whole batch when only batchId is supplied.
   ipcMain.handle("library:export-batch-cancel", (_event, args = {}) => {

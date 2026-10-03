@@ -33,7 +33,7 @@ class FfmpegExportRenderer {
       runFfmpeg: (command, args) => run(command, args, { spawnProcess: this.spawnProcess, timeoutMs: Number(options.probeTimeoutMs) || PROBE_TIMEOUT_MS })
     });
   }
-  async render({ inputPath, outputPath, graph, lutRegistry, styleRegistry, durationSeconds = null, timestampSeconds = null, clip = null, onProgress = null, signal = null, videoSpec = null }) {
+  async render({ inputPath, outputPath, graph, lutRegistry, styleRegistry, durationSeconds = null, timestampSeconds = null, clip = null, onProgress = null, signal = null, videoSpec = null, metadata = null }) {
     if (!inputPath || !outputPath) throw new Error("Export input and output paths are required");
     if (path.resolve(inputPath) === path.resolve(outputPath)) throw new Error("Export output must be different from the source file");
     const spec = normalizeVideoSpec(videoSpec);
@@ -77,7 +77,7 @@ class FfmpegExportRenderer {
       const copyArgs = buildCopyArgs({
         inputPath, outputPath, sourceIn, sourceDuration: encodeDuration,
         audioMode: probe.hasAudio ? audioPlan.mode : "drop", volume,
-        videoCodec: probe.videoCodec
+        videoCodec: probe.videoCodec, metadata
       });
       const copyResult = await run(this.ffmpegPath, copyArgs, { onProgress, durationSeconds: progressDuration, signal, spawnProcess: this.spawnProcess });
       if (copyResult.aborted) {
@@ -126,7 +126,7 @@ class FfmpegExportRenderer {
       sourceIn, sourceDuration: encodeDuration, speed, muted, volume,
       width, height, platform: this.platform,
       audioMode: probe.hasAudio ? audioPlan.mode : "drop",
-      pixelFormat, tenBit: spec.tenBit, videoBitrate: spec.videoBitrate, codec: spec.codec
+      pixelFormat, tenBit: spec.tenBit, videoBitrate: spec.videoBitrate, codec: spec.codec, metadata
     });
     const hardwareEncoder = await this.encoderSelector.select({ codec: spec.codec, tenBit: spec.tenBit });
     let encoder = hardwareEncoder;
@@ -173,7 +173,7 @@ class FfmpegExportRenderer {
 // nearest preceding keyframe instead of decoding and discarding everything up to
 // the cut. On this camera's footage keyframes land every 0.5s, so the cost is at
 // most half a second of extra lead-in, against minutes saved.
-function buildCopyArgs({ inputPath, outputPath, sourceIn, sourceDuration, audioMode = "copy", volume = 1, videoCodec = null }) {
+function buildCopyArgs({ inputPath, outputPath, sourceIn, sourceDuration, audioMode = "copy", volume = 1, videoCodec = null, metadata = null }) {
   const args = ["-y", "-v", "error", "-progress", "pipe:2", "-nostats"];
   if (sourceIn !== null && sourceIn !== undefined && Number(sourceIn) > 0) args.push("-ss", String(sourceIn));
   args.push("-i", inputPath, "-map", "0:v:0");
@@ -200,12 +200,27 @@ function buildCopyArgs({ inputPath, outputPath, sourceIn, sourceDuration, audioM
   // the new start. Shifting to zero keeps players from showing a frozen frame or
   // desynced audio at the head of a trimmed copy.
   args.push("-movflags", "+faststart", "-avoid_negative_ts", "make_zero");
+  // After -map_metadata, so the user's copyright replaces the camera's own
+  // blanks instead of being overwritten by them.
+  args.push(...metadataArgs(metadata));
   if (sourceDuration !== null && sourceDuration !== undefined) args.push("-t", String(sourceDuration));
   args.push(outputPath);
   return args;
 }
 
-function buildExportArgs({ encoder, inputPath, outputPath, filterGraph, inputArgs = [], sourceIn, sourceDuration, speed, muted, volume, width, height, platform = process.platform, audioMode = "encode", tenBit = false, videoBitrate = null, codec = null }) {
+// The metadata the user asked to carry: artist, copyright, comment. ffmpeg maps
+// them to the container's own tags (©ART, cprt, ©cmt in MP4).
+function metadataArgs(metadata) {
+  const args = [];
+  if (!metadata || typeof metadata !== "object") return args;
+  for (const key of ["artist", "copyright", "comment"]) {
+    const value = typeof metadata[key] === "string" ? metadata[key].trim() : "";
+    if (value) args.push("-metadata", key + "=" + value);
+  }
+  return args;
+}
+
+function buildExportArgs({ encoder, inputPath, outputPath, filterGraph, inputArgs = [], sourceIn, sourceDuration, speed, muted, volume, width, height, platform = process.platform, audioMode = "encode", tenBit = false, videoBitrate = null, codec = null, metadata = null }) {
   const args = ["-y", "-v", "error", "-progress", "pipe:2", "-nostats"];
   // -hwaccel is an input option: it has to precede the -i it applies to, and it
   // applies only to the next input, so it goes here rather than with inputArgs
@@ -235,6 +250,7 @@ function buildExportArgs({ encoder, inputPath, outputPath, filterGraph, inputArg
     if (audioFilters.length) args.push("-af", audioFilters.join(","));
   }
   args.push("-movflags", "+faststart");
+  args.push(...metadataArgs(metadata));
   if (sourceDuration !== null && sourceDuration !== undefined) args.push("-t", String(sourceDuration / speed));
   args.push(outputPath);
   return args;

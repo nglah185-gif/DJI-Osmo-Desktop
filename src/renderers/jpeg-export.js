@@ -53,10 +53,54 @@ function copyJpegMetadata(sourcePath, targetPath) {
   return true;
 }
 
+// Copyright on a still belongs in XMP, and XMP is the one metadata block that can
+// be appended without rewriting a single offset: an APP1 segment holding an RDF
+// packet. dc:creator and dc:rights are what every reader and asset manager looks
+// for -- the same idea as a transfer tool's XMP/IPTC preset.
+const XMP_HEADER = "http://ns.adobe.com/xap/1.0/";
+
+function xmpPacket({ artist = "", copyright = "", comment = "" } = {}) {
+  const escape = value => String(value || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  const creator = artist ? "<dc:creator><rdf:Seq><rdf:li>" + escape(artist) + "</rdf:li></rdf:Seq></dc:creator>" : "";
+  const rights = copyright ? "<dc:rights><rdf:Alt><rdf:li xml:lang=\"x-default\">" + escape(copyright) + "</rdf:li></rdf:Alt></dc:rights>" : "";
+  const description = comment ? "<dc:description><rdf:Alt><rdf:li xml:lang=\"x-default\">" + escape(comment) + "</rdf:li></rdf:Alt></dc:description>" : "";
+  if (!creator && !rights && !description) return null;
+  const body = "<?xpacket begin=\"\uFEFF\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?><x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\"><rdf:Description rdf:about=\"\" xmlns:dc=\"http://purl.org/dc/elements/1.1/\">" + creator + rights + description + "</rdf:Description></rdf:RDF></x:xmpmeta><?xpacket end=\"w\"?>";
+  return Buffer.from(XMP_HEADER + "\u0000" + body, "utf8");
+}
+
+// Replaces any XMP a previous export left behind, so repeated runs do not stack
+// packets, and keeps the segment ahead of the frame data where readers look.
+function writeJpegXmp(targetPath, metadata) {
+  const packet = xmpPacket(metadata);
+  if (!packet) return false;
+  const data = fs.readFileSync(targetPath);
+  if (data.length < 4 || data[0] !== 0xff || data[1] !== 0xd8) return false;
+  const head = Buffer.alloc(4);
+  head[0] = 0xff;
+  head[1] = 0xe1;
+  head.writeUInt16BE(packet.length + 2, 2);
+  const segment = Buffer.concat([head, packet]);
+  const keep = [data.subarray(0, 2)];
+  let offset = 2;
+  while (offset + 4 <= data.length && data[offset] === 0xff) {
+    const marker = data[offset + 1];
+    if (marker === 0xda || marker === 0xd9) break;
+    const length = data.readUInt16BE(offset + 2);
+    if (length < 2) break;
+    const end = offset + 2 + length;
+    if (end > data.length) break;
+    const previous = marker === 0xe1 && data.subarray(offset + 4, Math.min(end, offset + 4 + XMP_HEADER.length)).toString("latin1") === XMP_HEADER;
+    if (!previous) keep.push(data.subarray(offset, end));
+    offset = end;
+  }
+  fs.writeFileSync(targetPath, Buffer.concat([...keep, segment, data.subarray(offset)]));
+  return true;
+}
+
 // DateTimeOriginal from the Exif sub-IFD. Written out rather than pulled from a
 // dependency: this is the only tag needed and it keeps the package to ffmpeg.
-function exifCaptureTime(file) {
-  let buffer;
+function exifCaptureTime(file) {  let buffer;
   try { buffer = fs.readFileSync(file); } catch { return null; }
   if (buffer[0] !== 0xff || buffer[1] !== 0xd8) return null;
   let offset = 2;
@@ -139,8 +183,16 @@ function jpegWatermarkFilters({ inkBox, scale = INK_WIDTH_RATIO, opacity = 1, ce
 // -q:v 1 is the encoder's best quality, and qmin/qmax have to be pinned too:
 // without them the encoder clamps the requested scale and the flag alone gives
 // 49.8 dB where the pinned form gives 51.2 dB.
-function buildJpegExportArgs({ inputPath, outputPath, watermarkPath, filterGraph }) {
-  return ["-y", "-v", "error", "-i", inputPath, "-i", watermarkPath, "-filter_complex", filterGraph, "-map", "[out]", "-frames:v", "1", "-q:v", "1", "-qmin", "1", "-qmax", "1", outputPath];
+function buildJpegExportArgs({ inputPath, outputPath, watermarkPath, filterGraph, metadata = null }) {
+  const encoded = ["-y", "-v", "error", "-i", inputPath, "-i", watermarkPath, "-filter_complex", filterGraph, "-map", "[out]", "-frames:v", "1", "-q:v", "1", "-qmin", "1", "-qmax", "1"];
+  // The mjpeg muxer writes these into the EXIF block; a copy would carry the
+  // camera's tags but could not be given a copyright.
+  for (const key of ["artist", "copyright", "comment"]) {
+    const value = metadata && typeof metadata[key] === "string" ? metadata[key].trim() : "";
+    if (value) encoded.push("-metadata", key + "=" + value);
+  }
+  encoded.push(outputPath);
+  return encoded;
 }
 
 function runFfmpeg(ffmpegPath, args, { signal = null, spawnProcess = spawn } = {}) {
@@ -175,7 +227,7 @@ let photoSequence = 0;
 // Writes the finished JPEG through a temporary file in the destination folder so
 // an interrupted run never leaves a half-written photo where the real one should
 // be. The temporary keeps the target extension: ffmpeg picks its muxer from it.
-async function exportJpeg({ ffmpegPath, inputPath, outputPath, watermarkPath = null, inkBox = null, signal = null, spawnProcess = undefined }) {
+async function exportJpeg({ ffmpegPath, inputPath, outputPath, watermarkPath = null, inkBox = null, signal = null, spawnProcess = undefined, metadata = null }) {
   if (!inputPath || !outputPath) throw new Error("Photo export input and output paths are required");
   if (path.resolve(inputPath) === path.resolve(outputPath)) throw new Error("Photo export output must be different from the source file");
   const temporary = path.join(path.dirname(outputPath), ".dji-photo-" + process.pid + "-" + (++photoSequence) + path.extname(outputPath));
@@ -183,13 +235,16 @@ async function exportJpeg({ ffmpegPath, inputPath, outputPath, watermarkPath = n
   try {
     if (watermarkPath && inkBox) {
       const filterGraph = jpegWatermarkFilters({ inkBox });
-      await runFfmpeg(ffmpegPath, buildJpegExportArgs({ inputPath, outputPath: temporary, watermarkPath, filterGraph }), { signal, spawnProcess });
+      await runFfmpeg(ffmpegPath, buildJpegExportArgs({ inputPath, outputPath: temporary, watermarkPath, filterGraph, metadata }), { signal, spawnProcess });
       metadataCopied = false;
       try { metadataCopied = copyJpegMetadata(inputPath, temporary); } catch { /* metadata is a bonus, never a reason to fail */ }
     } else {
       if (signal && signal.aborted) throw new Error("Export canceled");
       await fs.promises.copyFile(inputPath, temporary);
     }
+    // The camera's EXIF is copied above, which would overwrite anything ffmpeg
+    // wrote; the copyright goes in as its own XMP segment afterwards.
+    if (metadata) { try { writeJpegXmp(temporary, metadata); } catch { /* never a reason to fail the export */ } }
     stampCaptureTime(temporary, captureTimeFor(inputPath, path.basename(outputPath)));
     const bytes = (await fs.promises.stat(temporary)).size;
     if (!bytes) throw new Error("Photo export produced an empty file");
@@ -202,5 +257,5 @@ async function exportJpeg({ ffmpegPath, inputPath, outputPath, watermarkPath = n
   }
 }
 
-const api = { copyJpegMetadata, exifCaptureTime, parseExifStamp, parseNameStamp, captureTimeFor, stampCaptureTime, jpegWatermarkFilters, buildJpegExportArgs, exportJpeg };
+const api = { copyJpegMetadata, xmpPacket, writeJpegXmp, exifCaptureTime, parseExifStamp, parseNameStamp, captureTimeFor, stampCaptureTime, jpegWatermarkFilters, buildJpegExportArgs, exportJpeg };
 if (typeof module !== "undefined" && module.exports) module.exports = api;

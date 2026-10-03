@@ -534,7 +534,128 @@ function playClockSilently() {
   $("sort-select").addEventListener("change", () => { state.sort = $("sort-select").value; updateNavigation(); paintGrid(); });
   $("rescan-button").addEventListener("click", () => { $("rescan-button").disabled = true; setScanStatus("scan.running"); api.scan().then(snapshot => { setScanStatus("scan.completed"); render(snapshot); }).catch(scanFailed).finally(() => { $("rescan-button").disabled = false; }); });
 
-  function openSettings() { api.getSettings().then(s => { state.settings = s; $("settings-language").value = s.language || "en"; $("settings-export-location").value = s.exportLocation || ""; $("settings-overlay").hidden = false; }).catch(() => {}); }
+  function openSettings() { api.getSettings().then(s => { state.settings = s; $("settings-language").value = s.language || "en"; $("settings-export-location").value = s.exportLocation || ""; paintSettingsExtras(s); $("settings-overlay").hidden = false; }).catch(() => {}); }
+
+  // ---- Naming, backup, copyright and export preferences -------------------
+  // One settings object on the wire; the dialog paints it, the main process
+  // reads it back when it builds a path or an ffmpeg command.
+  const renameRulesApi = window.__renameRules;
+  let renameDraft = renameRulesApi ? renameRulesApi.initialState() : null;
+  let settingsSaveTimer = null;
+
+  function saveSettings(patch) {
+    state.settings = { ...(state.settings || {}), ...patch };
+    clearTimeout(settingsSaveTimer);
+    settingsSaveTimer = setTimeout(() => { api.setSettings(patch).then(next => { state.settings = next; }).catch(() => {}); }, 250);
+  }
+  // The example is the clip that is open, so the user reads their own file name.
+  function renameSampleContext() {
+    const asset = state.asset;
+    const probe = (asset && asset.original && asset.original.probe) || {};
+    const name = asset && asset.original && asset.original.name ? asset.original.name.replace(/\.[^.]+$/, "") : "DJI_20260924165052_0113_D";
+    return { name, date: new Date(), model: (asset && asset.cameraModel) || "DJI Osmo Action 4 / HG302", colorMode: (asset && asset.djiColorMode) || "D-Log M", tenBit: false, height: probe.height || 2160, fps: probe.frameRate || 59.94, kind: "video", index: 1, extension: ".MP4" };
+  }
+  function renameSummary(rules) {
+    if (!renameRulesApi) return "";
+    return renameRulesApi.isDefaultRules(rules) ? ts("rename.summaryOff") : renameRulesApi.buildName(rules, renameSampleContext());
+  }
+  function paintRenameDialog() {
+    if (!renameRulesApi || !renameDraft) return;
+    const model = renameRulesApi.view(renameDraft, renameSampleContext());
+    $("rename-enabled").checked = model.enabled;
+    $("rename-example").textContent = model.example;
+    $("rename-prefix-text").value = model.prefixText;
+    $("rename-suffix-text").value = model.suffixText;
+    const fillChoices = (hostId, modes, value, key) => {
+      const host = $(hostId);
+      host.replaceChildren();
+      for (const mode of modes) {
+        const label = document.createElement("label");
+        label.className = "rename-choice" + (mode.value === value ? " active" : "");
+        const input = document.createElement("input");
+        input.type = "radio";
+        input.name = key;
+        input.value = mode.value;
+        input.checked = mode.value === value;
+        const text = document.createElement("span");
+        text.textContent = ts(mode.labelKey);
+        label.append(input, text);
+        label.addEventListener("click", () => { renameDraft = { ...renameDraft, [key === "rename-prefix" ? "prefix" : "suffix"]: mode.value }; commitRename(); });
+        host.appendChild(label);
+      }
+    };
+    fillChoices("rename-prefix-list", model.prefixModes, model.prefix, "rename-prefix");
+    fillChoices("rename-suffix-list", model.suffixModes, model.suffix, "rename-suffix");
+    const chips = $("rename-pieces");
+    chips.replaceChildren();
+    for (const piece of model.pieces) {
+      const chip = document.createElement("button");
+      chip.type = "button";
+      chip.className = "rename-chip" + (renameDraft.pieces.includes(piece.value) ? " active" : "");
+      chip.textContent = ts(piece.labelKey);
+      chip.addEventListener("click", () => {
+        const pieces = renameDraft.pieces.includes(piece.value) ? renameDraft.pieces.filter(value => value !== piece.value) : [...renameDraft.pieces, piece.value];
+        renameDraft = { ...renameDraft, pieces };
+        commitRename();
+      });
+      chips.appendChild(chip);
+    }
+    const fillSelect = (id, entries, value) => {
+      const select = $(id);
+      const signature = entries.map(entry => entry.value).join(",");
+      if (select.dataset.signature !== signature) {
+        select.replaceChildren();
+        for (const entry of entries) select.appendChild(new Option(ts(entry.labelKey), entry.value));
+        select.dataset.signature = signature;
+      }
+      select.value = value;
+    };
+    fillSelect("rename-join", model.joins, model.join);
+    fillSelect("rename-date-format", model.dateFormats, model.dateFormat);
+    $("rename-sequence").checked = model.sequence;
+    $("rename-sequence-length").value = String(model.sequenceLength);
+  }
+  function commitRename() {
+    if (!renameRulesApi || !renameDraft) return;
+    paintRenameDialog();
+    $("settings-rename-summary").value = renameSummary(renameDraft);
+    saveSettings({ renameRules: renameDraft });
+  }
+  function paintSettingsExtras(s = {}) {
+    const backup = s.backup || {};
+    $("settings-backup-enabled").checked = backup.enabled === true;
+    $("settings-backup-location").value = backup.location || "";
+    $("settings-backup-subfolder").value = backup.subfolder || "";
+    const rights = s.copyright || {};
+    $("settings-copyright-enabled").checked = rights.enabled === true;
+    $("settings-copyright-artist").value = rights.artist || "";
+    $("settings-copyright-rights").value = rights.copyright || "";
+    $("settings-copyright-comment").value = rights.comment || "";
+    const prefs = s.exportPrefs || {};
+    $("settings-only-new").checked = prefs.onlyNew === true;
+    $("settings-open-folder").checked = prefs.openFolder === true;
+    $("settings-rename-summary").value = renameRulesApi ? renameSummary(renameRulesApi.initialState(s.renameRules)) : "";
+  }
+  if (renameRulesApi) {
+    $("settings-rename-open").addEventListener("click", () => { renameDraft = renameRulesApi.initialState((state.settings && state.settings.renameRules) || null); paintRenameDialog(); $("rename-overlay").hidden = false; });
+    $("rename-close").addEventListener("click", () => { $("rename-overlay").hidden = true; });
+    $("rename-enabled").addEventListener("change", event => { renameDraft = { ...renameDraft, enabled: event.target.checked }; commitRename(); });
+    $("rename-prefix-text").addEventListener("input", event => { renameDraft = { ...renameDraft, prefixText: event.target.value }; commitRename(); });
+    $("rename-suffix-text").addEventListener("input", event => { renameDraft = { ...renameDraft, suffixText: event.target.value }; commitRename(); });
+    $("rename-join").addEventListener("change", event => { renameDraft = { ...renameDraft, join: event.target.value }; commitRename(); });
+    $("rename-date-format").addEventListener("change", event => { renameDraft = { ...renameDraft, dateFormat: event.target.value }; commitRename(); });
+    $("rename-sequence").addEventListener("change", event => { renameDraft = { ...renameDraft, sequence: event.target.checked }; commitRename(); });
+    $("rename-sequence-length").addEventListener("change", event => { renameDraft = { ...renameDraft, sequenceLength: Number(event.target.value) || 3 }; commitRename(); });
+  }
+  $("settings-backup-enabled").addEventListener("change", event => saveSettings({ backup: { ...(state.settings && state.settings.backup), enabled: event.target.checked } }));
+  $("settings-backup-choose").addEventListener("click", async () => { const dir = await api.chooseFolder(); if (!dir) return; $("settings-backup-location").value = dir; saveSettings({ backup: { ...(state.settings && state.settings.backup), location: dir } }); });
+  $("settings-backup-subfolder").addEventListener("change", event => saveSettings({ backup: { ...(state.settings && state.settings.backup), subfolder: event.target.value } }));
+  $("settings-copyright-enabled").addEventListener("change", event => saveSettings({ copyright: { ...(state.settings && state.settings.copyright), enabled: event.target.checked } }));
+  $("settings-copyright-artist").addEventListener("change", event => saveSettings({ copyright: { ...(state.settings && state.settings.copyright), artist: event.target.value } }));
+  $("settings-copyright-rights").addEventListener("change", event => saveSettings({ copyright: { ...(state.settings && state.settings.copyright), copyright: event.target.value } }));
+  $("settings-copyright-comment").addEventListener("change", event => saveSettings({ copyright: { ...(state.settings && state.settings.copyright), comment: event.target.value } }));
+  $("settings-only-new").addEventListener("change", event => saveSettings({ exportPrefs: { ...(state.settings && state.settings.exportPrefs), onlyNew: event.target.checked } }));
+  $("settings-open-folder").addEventListener("change", event => saveSettings({ exportPrefs: { ...(state.settings && state.settings.exportPrefs), openFolder: event.target.checked } }));
   $("settings-button").addEventListener("click", openSettings);
   $("settings-close").addEventListener("click", () => { $("settings-overlay").hidden = true; });
   $("settings-language").addEventListener("change", () => { const lang = $("settings-language").value; window.i18n.setLanguage(lang); refreshDynamicLanguage(); setTimeout(() => { $("language-select").value = lang; }, 0); api.setSettings({ language: lang }); });

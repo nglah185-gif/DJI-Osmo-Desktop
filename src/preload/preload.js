@@ -34,6 +34,7 @@ contextBridge.exposeInMainWorld("djiMedia", Object.freeze({
   getSettings: () => ipcRenderer.invoke("settings:get"),
   setSettings: patch => ipcRenderer.invoke("settings:set", patch),
   chooseExportLocation: () => ipcRenderer.invoke("settings:choose-export-location"),
+  chooseFolder: () => ipcRenderer.invoke("settings:choose-folder"),
   onSnapshot: callback => {
     if (typeof callback !== "function") return () => {};
     const listener = (_event, snapshot) => callback(snapshot);

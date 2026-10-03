@@ -127,6 +127,29 @@ decides what each row is called. Rows carry their own preview for a reason: two
 badges of the same device differ only in the artwork, so a list of names could
 not tell them apart.
 
+## Transfer naming, backup and copyright
+
+`src/renderer/rename-rules.js` is the naming authority, shared by the dialog and
+the main process the same way the badge catalogue is. It turns a template — a
+prefix mode, an ordered list of metadata pieces, a suffix mode, one separator and
+an optional running number — into a file name, using `sanitize()` to keep Windows
+out of trouble and dropping empty pieces so `Action4` and a non-log clip do not
+produce a doubled separator. `buildName()` is the single implementation: the
+example in the dialog is the name that lands on disk.
+
+The settings (`renameRules`, `backup`, `copyright`, `exportPrefs`) travel as one
+object through `settings:get` / `settings:set`. Every transfer reads them once, at
+the start: a long export must finish under the naming decision it began with, so
+the rules are passed into the backup step rather than re-read when it runs.
+
+Copyright is written where each container expects it. Video goes through
+ffmpeg's container metadata (`-metadata artist/copyright/comment`, added after
+`-map_metadata 0` so the user's values win over the camera's blanks). A still
+cannot use that path — the camera's EXIF is copied back over the encode to
+preserve the capture data — so `writeJpegXmp()` appends an XMP packet instead:
+an APP1 segment carrying `dc:creator`, `dc:rights` and `dc:description`, which is
+also the only metadata block that can be inserted without rewriting offsets.
+
 ## Batch export
 
 `src/tasks/export-queue.js` is a serial-by-default queue: per-item state,
